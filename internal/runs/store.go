@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS events (
 	ts      TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id);
-`
+` + scheduleSchema
 
 // Open opens (creating if needed) the registry at path and applies the schema.
 func Open(ctx context.Context, path string) (*Store, error) {

@@ -31,6 +31,10 @@ func Register(mux *http.ServeMux, store *runs.Store, opts Options) {
 	mux.HandleFunc("POST /api/runs", s.createRun)
 	mux.HandleFunc("GET /api/runs/{id}", s.getRun)
 	mux.HandleFunc("POST /api/triggers/github", s.handleGitHubTrigger)
+	mux.HandleFunc("GET /api/schedules", s.listSchedules)
+	mux.HandleFunc("POST /api/schedules", s.createSchedule)
+	mux.HandleFunc("DELETE /api/schedules/{id}", s.deleteSchedule)
+	mux.HandleFunc("POST /api/schedules/{id}/toggle", s.toggleSchedule)
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {

@@ -58,6 +58,7 @@ func main() {
 
 	pool := scheduler.NewPool(store, exec, *workers, logger)
 	go pool.Start(ctx)
+	go pool.RunCronLoop(ctx)
 
 	mux := http.NewServeMux()
 	api.Register(mux, store, api.Options{TriggerToken: os.Getenv("PETAL_TRIGGER_TOKEN")})

@@ -112,6 +112,10 @@ The container is a distroless static image (~20MB) — no OS packages, no shell.
 | GET | `/api/runs?limit=50` | Recent runs |
 | POST | `/api/runs` | Trigger a run: `{"pipeline":"docker-image","module_fn":"build","args":{}}` — optional `dedup_key` for at-least-once dedup |
 | POST | `/api/triggers/github` | Signed webhook (HMAC-SHA256, header `X-Petal-Signature`) for CI triggers; enables with `PETAL_TRIGGER_TOKEN` env; dedups on `git_sha:pipeline` |
+| GET | `/api/schedules` | List cron schedules |
+| POST | `/api/schedules` | Create a schedule: `{"pipeline":"docker-image","cron":"*/15 * * * *","args":{}}` |
+| DELETE | `/api/schedules/{id}` | Delete a schedule |
+| POST | `/api/schedules/{id}/toggle` | Enable/disable a schedule |
 | GET | `/api/runs/{id}` | Run detail + audit events |
 
 ### Wiring GitHub Actions → Petal
@@ -145,6 +149,6 @@ docs/adr/            # architecture decision records
 ## Phases
 
 - [x] **A — walking skeleton**: binary + UI + registry + manual trigger + stub executor
-- [ ] **B — brains**: ~~Dagger executor~~ ✅ · GHA webhook receiver · cron scheduler · standalone pipeline modules
+- [ ] **B — brains**: ~~Dagger executor~~ ✅ · ~~GHA webhook receiver~~ ✅ · ~~cron scheduler~~ ✅ · standalone pipeline modules
 - [ ] **C — senses**: OTel wiring, health dashboard, metrics
 - [ ] **D — catalog**: ArgoCD/K8s views, scorecards, notifications
