@@ -1,0 +1,108 @@
+name: Build and Push Petal Image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Dockerfile'
+      - 'go.mod'
+      - 'go.sum'
+      - '**.go'
+      - 'web/**'
+      - '.github/workflows/build-petal.yaml'
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - 'go.mod'
+      - 'go.sum'
+      - '**.go'
+      - 'web/**'
+      - '.github/workflows/build-petal.yaml'
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        id: test
+        run: go test ./...
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
+          tags: |
+            ghcr.io/blacklotus89898/petal:latest
+            ghcr.io/blacklotus89898/petal:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan image for vulnerabilities
+        id: trivy
+        if: steps.build.outcome == 'success'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ghcr.io/blacklotus89898/petal:${{ github.sha }}
+          format: sarif
+          output: trivy-image.sarif
+          severity: CRITICAL,HIGH
+          exit-code: '0'
+
+      - name: Upload Trivy results to GitHub Security tab
+        if: steps.trivy.outcome == 'success'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-petal-image
+
+      - name: Job summary
+        if: always()
+        run: |
+          icon() { [ "$1" = "success" ] && echo "✅" || [ "$1" = "skipped" ] && echo "⏭️" || echo "❌"; }
+          if [ "${{ steps.build.outcome }}" = "success" ]; then
+            BUILD_STATUS="Success"
+          else
+            BUILD_STATUS="Failed"
+          fi
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ## $(icon "${{ steps.build.outcome }}") Petal Image Build — ${BUILD_STATUS}
+
+          | | |
+          |---|---|
+          | **Commit** | \`${{ github.sha }}\` |
+          | **Branch** | \`${{ github.ref_name }}\` |
+          | **Triggered by** | ${{ github.actor }} |
+          | **Image: latest** | \`ghcr.io/blacklotus89898/petal:latest\` |
+          | **Image: SHA tag** | \`ghcr.io/blacklotus89898/petal:${{ github.sha }}\` |
+          | **Go tests** | $(icon "${{ steps.test.outcome }}") \`${{ steps.test.outcome }}\` |
+          | **Trivy image scan** | $(icon "${{ steps.trivy.outcome }}") \`${{ steps.trivy.outcome }}\` |
+
+          EOF
