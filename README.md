@@ -72,11 +72,24 @@ runs complete after ~1.5s; use args `{"simulate":"failure"}` to see failures).
 
 ### Real pipelines (Dagger executor)
 
+The Dagger engine is a **Linux container** and cannot be provisioned from a
+native Windows process (silently times out waiting for engine session params —
+verified; `DOCKER_HOST` does not help). On a Windows dev box, run Petal itself
+as a Linux container — same image as production, engine created as a sibling
+container via the mounted daemon socket:
+
 ```powershell
-go run . -executor dagger -workdir .   # requires a running Docker/Podman
+docker compose -f deploy/compose.yaml up --build -d
+# UI on http://localhost:8080 — executor is dagger, workdir mounted at /src
 ```
 
-Pipeline `docker-image` builds this repo's Dockerfile and publishes it — by
+On Linux/WSL2 (and the k3s deployment), the binary runs directly:
+
+```powershell
+go run . -executor dagger -workdir .
+```
+
+Pipeline `docker-image` builds the workdir Dockerfile and publishes it — by
 default to an ephemeral [ttl.sh](https://ttl.sh) ref (no credentials needed),
 overridable with args `{"ref": "ghcr.io/you/petal:dev"}`. **Dogfood:
 Petal builds Petal.**

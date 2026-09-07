@@ -9,7 +9,7 @@ import (
 )
 
 func TestDaggerUnknownPipelineFailsFast(t *testing.T) {
-	d := NewDagger(".")
+	d := NewDagger(".", nil)
 	run := runs.Run{ID: "run_test", Pipeline: "does-not-exist", ArgsJSON: "{}"}
 	res := d.Execute(context.Background(), run)
 	if res.Status != runs.StatusFailed {

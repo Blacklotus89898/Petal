@@ -11,7 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
+	"log/slog"
 	"strings"
 
 	"dagger.io/dagger"
@@ -28,14 +28,18 @@ type DaggerFunc func(ctx context.Context, client *dagger.Client, run runs.Run) (
 // with a clear message instead of hanging or panicking.
 type Dagger struct {
 	workdir   string
+	log       *slog.Logger
 	pipelines map[string]DaggerFunc
 }
 
 // NewDagger creates the executor with the default pipeline registry.
 // workdir is the source tree pipelines build from (the Petal repo itself for
 // the dogfood path).
-func NewDagger(workdir string) *Dagger {
-	d := &Dagger{workdir: workdir, pipelines: map[string]DaggerFunc{}}
+func NewDagger(workdir string, log *slog.Logger) *Dagger {
+	if log == nil {
+		log = slog.Default()
+	}
+	d := &Dagger{workdir: workdir, log: log, pipelines: map[string]DaggerFunc{}}
 	d.pipelines["docker-image"] = d.buildDockerImage
 	return d
 }
@@ -52,7 +56,7 @@ func (d *Dagger) Execute(ctx context.Context, run runs.Run) Result {
 			Error:  fmt.Sprintf("unknown pipeline %q (registered: %s)", run.Pipeline, d.registered()),
 		}
 	}
-	client, err := dagger.Connect(ctx, dagger.WithLogOutput(io.Discard))
+	client, err := dagger.Connect(ctx, dagger.WithLogOutput(logWriter{d.log}))
 	if err != nil {
 		return Result{
 			Status: runs.StatusFailed,
@@ -101,4 +105,16 @@ func argString(run runs.Run, key string) (string, bool) {
 	}
 	v, ok := args[key].(string)
 	return v, ok
+}
+
+// logWriter adapts Dagger SDK progress output into the structured logger.
+type logWriter struct{ log *slog.Logger }
+
+func (w logWriter) Write(p []byte) (int, error) {
+	for _, line := range strings.Split(strings.TrimRight(string(p), "\n"), "\n") {
+		if line != "" {
+			w.log.Info("dagger", "out", line)
+		}
+	}
+	return len(p), nil
 }

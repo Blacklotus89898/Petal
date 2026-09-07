@@ -52,7 +52,7 @@ func main() {
 
 	var exec executor.Executor = executor.Stub{}
 	if *execName == "dagger" {
-		exec = executor.NewDagger(*workdir)
+		exec = executor.NewDagger(*workdir, logger)
 	}
 	logger.Info("executor selected", "executor", exec.Name())
 

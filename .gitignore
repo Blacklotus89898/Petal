@@ -16,3 +16,4 @@ data/
 
 # Secrets / local
 .env
+petal-linux
