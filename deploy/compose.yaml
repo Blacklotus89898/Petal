@@ -1,0 +1,14 @@
+# Local/dev run of the full container (mirrors how Petal will run on k3s).
+# Production manifests live in the Homelab repo as apps/petal (GitOps).
+services:
+  petal:
+    build:
+      context: ..
+    ports:
+      - "8080:8080"
+    volumes:
+      - petal-data:/data
+    restart: unless-stopped
+
+volumes:
+  petal-data:
