@@ -30,6 +30,8 @@ func main() {
 	addr := flag.String("addr", ":8080", "listen address")
 	dbPath := flag.String("db", "data/petal.db", "SQLite database path")
 	workers := flag.Int("workers", 2, "executor worker count")
+	execName := flag.String("executor", "stub", "executor: stub or dagger")
+	workdir := flag.String("workdir", ".", "source workdir for pipelines (dagger executor)")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
@@ -48,7 +50,13 @@ func main() {
 	}
 	defer store.Close()
 
-	pool := scheduler.NewPool(store, executor.Stub{}, *workers, logger)
+	var exec executor.Executor = executor.Stub{}
+	if *execName == "dagger" {
+		exec = executor.NewDagger(*workdir)
+	}
+	logger.Info("executor selected", "executor", exec.Name())
+
+	pool := scheduler.NewPool(store, exec, *workers, logger)
 	go pool.Start(ctx)
 
 	mux := http.NewServeMux()

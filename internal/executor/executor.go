@@ -14,6 +14,7 @@ import (
 type Result struct {
 	Status string // runs.StatusSucceeded or runs.StatusFailed
 	Error  string
+	Output string // human-readable artifact (image ref, test summary, ...)
 }
 
 // Executor executes a single run to completion. Implementations must respect

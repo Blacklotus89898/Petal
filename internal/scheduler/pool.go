@@ -5,6 +5,7 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"sync"
 	"time"
@@ -69,6 +70,10 @@ func (p *Pool) worker(ctx context.Context, id int) {
 		res := p.execute(ctx, *run)
 		if err := p.store.Finish(ctx, run.ID, res.Status, res.Error); err != nil {
 			p.log.Error("finish run", "run", run.ID, "err", err)
+		}
+		if res.Output != "" {
+			payload, _ := json.Marshal(map[string]string{"output": res.Output})
+			_ = p.store.AppendEvent(ctx, run.ID, "output", string(payload))
 		}
 		p.log.Info("run finished", "run", run.ID, "status", res.Status)
 	}
