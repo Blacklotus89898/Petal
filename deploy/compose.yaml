@@ -20,6 +20,11 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       # Pipeline source: the catalog is discovered at /src/.petal/pipelines/.
       - ..:/src
+      # NOTE: step containers bind-mount <dataDir>/work/<run_id> as /src, and
+      # the daemon resolves that source in ITS filesystem. With the socket
+      # mount above that is the host, so /data must exist on the host for
+      # runs to work here — prefer the k3s deployment (dind sidecar shares
+      # the same /data PVC) for exercising the step-runner.
     restart: unless-stopped
 
 volumes:
