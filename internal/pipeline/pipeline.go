@@ -24,6 +24,11 @@ var (
 // pipelinesDir is the repo-relative directory scanned for pipeline files.
 const pipelinesDir = ".petal/pipelines"
 
+// ValidName reports whether s is a valid pipeline/step/param identifier:
+// lowercase kebab-case (letters, digits, - _ .), ≤64 chars, no leading
+// separator. Exported because log-file serving uses it as its path-safety gate.
+func ValidName(s string) bool { return validName(s) }
+
 // nameRe matches valid pipeline/step/param identifiers: lowercase kebab-case.
 // (Kept as a plain check to avoid a regexp dep in the hot path.)
 func validName(s string) bool {
@@ -46,27 +51,27 @@ func validName(s string) bool {
 
 // Param is a typed trigger argument with an optional default.
 type Param struct {
-	Default  string `yaml:"default,omitempty"`
-	Required bool   `yaml:"required,omitempty"`
+	Default  string `yaml:"default,omitempty" json:"default,omitempty"`
+	Required bool   `yaml:"required,omitempty" json:"required,omitempty"`
 }
 
 // Step is one container execution in a pipeline.
 type Step struct {
-	Name  string            `yaml:"name"`
-	Image string            `yaml:"image"`
-	Run   string            `yaml:"run"`
-	Env   map[string]string `yaml:"env,omitempty"`
+	Name  string            `yaml:"name" json:"name"`
+	Image string            `yaml:"image" json:"image"`
+	Run   string            `yaml:"run" json:"run"`
+	Env   map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
 }
 
 // Pipeline is a validated pipeline definition.
 type Pipeline struct {
-	Name        string
-	Description string
-	Params      map[string]Param
-	Steps       []Step
+	Name        string           `json:"name"`
+	Description string           `json:"description,omitempty"`
+	Params      map[string]Param `json:"params,omitempty"`
+	Steps       []Step           `json:"steps"`
 	// Outputs maps output names to workspace-relative file paths the steps
 	// must produce; contents become the run's structured output event.
-	Outputs map[string]string
+	Outputs map[string]string `json:"outputs,omitempty"`
 }
 
 // fileSpec mirrors the YAML on disk; unknown fields are rejected so typos

@@ -5,13 +5,17 @@ import {
   Badge,
   Button,
   Card,
+  Code,
+  Drawer,
   Group,
   Loader,
   Modal,
+  ScrollArea,
+  Select,
   Table,
   Text,
   Textarea,
-  TextInput,
+  Timeline,
   Title,
   Tooltip,
 } from '@mantine/core'
@@ -27,12 +31,19 @@ function fmtDuration(run) {
   return `${((end - new Date(run.started_at)) / 1000).toFixed(1)}s`
 }
 
-function TriggerModal({ opened, onClose, onTriggered }) {
-  const [pipeline, setPipeline] = useState('docker-image')
-  const [moduleFn, setModuleFn] = useState('build')
+function TriggerModal({ opened, onClose, onTriggered, pipelines }) {
+  const options = (pipelines || []).map(p => ({
+    value: p.name,
+    label: p.description ? `${p.name} — ${p.description}` : p.name,
+  }))
+  const [pipeline, setPipeline] = useState('')
   const [args, setArgs] = useState('{}')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (opened && !pipeline && options.length > 0) setPipeline(options[0].value)
+  }, [opened, options, pipeline])
 
   const submit = async () => {
     setBusy(true)
@@ -42,7 +53,7 @@ function TriggerModal({ opened, onClose, onTriggered }) {
       const res = await fetch('/api/runs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pipeline, module_fn: moduleFn, args: parsed }),
+        body: JSON.stringify({ pipeline, args: parsed }),
       })
       if (!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`)
       onTriggered()
@@ -57,20 +68,117 @@ function TriggerModal({ opened, onClose, onTriggered }) {
   return (
     <Modal opened={opened} onClose={onClose} title="Trigger run" centered>
       {error && <Alert color="red" mb="sm">{error}</Alert>}
-      <TextInput label="Pipeline" value={pipeline} onChange={e => setPipeline(e.currentTarget.value)} mb="sm" />
-      <TextInput label="Module function" value={moduleFn} onChange={e => setModuleFn(e.currentTarget.value)} mb="sm" />
+      {options.length === 0 ? (
+        <Text size="sm" c="dimmed" mb="sm">
+          No pipelines discovered in the repo's <Code>.petal/pipelines/</Code> directory.
+        </Text>
+      ) : (
+        <Select
+          label="Pipeline"
+          data={options}
+          value={pipeline}
+          onChange={setPipeline}
+          mb="sm"
+        />
+      )}
       <Textarea label="Arguments (JSON)" value={args} onChange={e => setArgs(e.currentTarget.value)} rows={4} mb="sm" />
       <Group justify="flex-end">
         <Button variant="default" onClick={onClose}>Cancel</Button>
-        <Button onClick={submit} loading={busy}>Run</Button>
+        <Button onClick={submit} loading={busy} disabled={options.length === 0}>Run</Button>
       </Group>
     </Modal>
   )
 }
 
+function eventLabel(ev) {
+  const p = JSON.parse(ev.payload || '{}')
+  switch (ev.kind) {
+    case 'queued': return `queued (${p.trigger || 'manual'})`
+    case 'step.started': return `step "${p.step}" started (${p.image})`
+    case 'step.finished':
+      return p.canceled ? `step "${p.step}" canceled`
+        : p.error ? `step "${p.step}" failed: ${p.error}`
+        : `step "${p.step}" finished (exit ${p.exit})`
+    case 'output': return `output: ${p.output}`
+    case 'succeeded': return 'run succeeded'
+    case 'failed': return 'run failed'
+    default: return ev.kind
+  }
+}
+
+function RunDrawer({ runId, opened, onClose }) {
+  const [detail, setDetail] = useState(null)
+  const [error, setError] = useState('')
+  const [logs, setLogs] = useState({})
+
+  useEffect(() => {
+    if (!opened || !runId) return
+    setDetail(null); setLogs({}); setError('')
+    let alive = true
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/runs/${runId}`)
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const data = await res.json()
+        if (!alive) return
+        setDetail(data)
+        const steps = data.events.filter(e => e.kind === 'step.started').map(e => JSON.parse(e.payload).step)
+        await Promise.all(steps.map(async step => {
+          const r = await fetch(`/api/runs/${runId}/logs/${step}`)
+          const text = r.ok ? await r.text() : `(no log: HTTP ${r.status})`
+          if (alive) setLogs(prev => ({ ...prev, [step]: text }))
+        }))
+      } catch (e) {
+        if (alive) setError(e.message)
+      }
+    })()
+    return () => { alive = false }
+  }, [opened, runId])
+
+  const stepNames = [...new Set((detail?.events || [])
+    .filter(e => e.kind === 'step.started')
+    .map(e => JSON.parse(e.payload).step))]
+
+  return (
+    <Drawer opened={opened} onClose={onClose} title={<span style={{ fontFamily: 'monospace' }}>{runId}</span>} position="right" size="xl">
+      {error && <Alert color="red" mb="md">{error}</Alert>}
+      {!detail ? (
+        <Group justify="center" p="xl"><Loader /></Group>
+      ) : (
+        <>
+          <Text size="sm" fw={600} mb="xs">Timeline</Text>
+          <Timeline active={detail.events.length} bulletSize={12} lineWidth={2} mb="md">
+            {detail.events.map(ev => (
+              <Timeline.Item key={ev.id} title={eventLabel(ev)}>
+                <Text size="xs" c="dimmed">{new Date(ev.ts).toLocaleTimeString()}</Text>
+              </Timeline.Item>
+            ))}
+          </Timeline>
+
+          {stepNames.map(step => (
+            <div key={step} mb="md">
+              <Group justify="space-between" mb={4}>
+                <Text size="sm" fw={600}>{step} — logs</Text>
+              </Group>
+              <ScrollArea.Autosize mah={300}>
+                <Code block ta="left" style={{ whiteSpace: 'pre-wrap' }}>
+                  {logs[step] ?? 'loading…'}
+                </Code>
+              </ScrollArea.Autosize>
+            </div>
+          ))}
+        </>
+      )}
+    </Drawer>
+  )
+}
+
 export default function App() {
   const [runs, setRuns] = useState(null)
+  const [pipelines, setPipelines] = useState([])
   const [error, setError] = useState('')
+  const [selectedRun, setSelectedRun] = useState(null)
+  const [drawerOpened, { open: openDrawer, close: closeDrawer }] = useDisclosure(false)
   const [modalOpened, { open: openModal, close: closeModal }] = useDisclosure(false)
   const [interval, setInterval] = useState(5000)
 
@@ -85,8 +193,16 @@ export default function App() {
     }
   }, [])
 
-  useEffect(() => { refresh() }, [refresh])
+  useEffect(() => {
+    refresh()
+    fetch('/api/pipelines')
+      .then(res => (res.ok ? res.json() : []))
+      .then(setPipelines)
+      .catch(() => {})
+  }, [refresh])
   useInterval(refresh, interval)
+
+  const openRun = id => { setSelectedRun(id); openDrawer() }
 
   return (
     <AppShell header={{ height: 56 }} padding="md">
@@ -122,7 +238,7 @@ export default function App() {
               </Table.Thead>
               <Table.Tbody>
                 {runs.map(run => (
-                  <Table.Tr key={run.id}>
+                  <Table.Tr key={run.id} onClick={() => openRun(run.id)} style={{ cursor: 'pointer' }}>
                     <Table.Td style={{ fontFamily: 'monospace' }}>{run.id}</Table.Td>
                     <Table.Td>{run.pipeline}{run.module_fn ? `:${run.module_fn}` : ''}</Table.Td>
                     <Table.Td><Badge variant="light" color="violet">{run.trigger_kind}</Badge></Table.Td>
@@ -145,7 +261,9 @@ export default function App() {
           )}
         </Card>
         <Text size="xs" c="dimmed" mt="sm">
-          Executor: stub (Phase A) · auto-refresh 5s
+          {pipelines.length > 0
+            ? `Pipelines: ${pipelines.map(p => p.name).join(', ')}`
+            : 'No pipelines found in .petal/pipelines/'} · auto-refresh 5s
         </Text>
       </AppShell.Main>
 
@@ -153,7 +271,9 @@ export default function App() {
         opened={modalOpened}
         onClose={closeModal}
         onTriggered={() => { refresh(); setInterval(1000) }}
+        pipelines={pipelines}
       />
+      <RunDrawer runId={selectedRun} opened={drawerOpened} onClose={closeDrawer} />
     </AppShell>
   )
 }

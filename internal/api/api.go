@@ -14,6 +14,8 @@ import (
 type Server struct {
 	store        *runs.Store
 	triggerToken string
+	workdir      string // pipeline catalog source (steps executor)
+	dataDir      string // step log files live under <dataDir>/logs
 }
 
 // Options configures optional API features.
@@ -21,15 +23,26 @@ type Options struct {
 	// TriggerToken enables the signed webhook trigger endpoint (POST
 	// /api/triggers/github). Empty disables it.
 	TriggerToken string
+	// Workdir enables the pipeline catalog endpoints (GET /api/pipelines)
+	// and create-run validation against the discovered specs.
+	Workdir string
+	// DataDir enables step log serving (GET /api/runs/{id}/logs/{step}).
+	DataDir string
 }
 
 // Register wires the API routes onto mux.
 func Register(mux *http.ServeMux, store *runs.Store, opts Options) {
-	s := &Server{store: store, triggerToken: opts.TriggerToken}
+	s := &Server{store: store, triggerToken: opts.TriggerToken, workdir: opts.Workdir, dataDir: opts.DataDir}
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.HandleFunc("GET /api/runs", s.listRuns)
 	mux.HandleFunc("POST /api/runs", s.createRun)
 	mux.HandleFunc("GET /api/runs/{id}", s.getRun)
+	if s.workdir != "" {
+		mux.HandleFunc("GET /api/pipelines", s.listPipelines)
+	}
+	if s.dataDir != "" {
+		mux.HandleFunc("GET /api/runs/{id}/logs/{step}", s.stepLogs)
+	}
 	mux.HandleFunc("POST /api/triggers/github", s.handleGitHubTrigger)
 	mux.HandleFunc("GET /api/schedules", s.listSchedules)
 	mux.HandleFunc("POST /api/schedules", s.createSchedule)

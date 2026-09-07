@@ -65,7 +65,11 @@ func main() {
 	go pool.RunCronLoop(ctx)
 
 	mux := http.NewServeMux()
-	api.Register(mux, store, api.Options{TriggerToken: os.Getenv("PETAL_TRIGGER_TOKEN")})
+	api.Register(mux, store, api.Options{
+		TriggerToken: os.Getenv("PETAL_TRIGGER_TOKEN"),
+		Workdir:      *workdir,
+		DataDir:      *dataDir,
+	})
 	mux.Handle("/", spaHandler())
 
 	srv := &http.Server{
