@@ -70,6 +70,17 @@ npm run dev
 Open http://localhost:5173 and trigger a run (Phase A ships the stub executor —
 runs complete after ~1.5s; use args `{"simulate":"failure"}` to see failures).
 
+### Real pipelines (Dagger executor)
+
+```powershell
+go run . -executor dagger -workdir .   # requires a running Docker/Podman
+```
+
+Pipeline `docker-image` builds this repo's Dockerfile and publishes it — by
+default to an ephemeral [ttl.sh](https://ttl.sh) ref (no credentials needed),
+overridable with args `{"ref": "ghcr.io/you/petal:dev"}`. **Dogfood:
+Petal builds Petal.**
+
 ### Production build (single container)
 
 ```powershell
@@ -107,6 +118,6 @@ docs/adr/            # architecture decision records
 ## Phases
 
 - [x] **A — walking skeleton**: binary + UI + registry + manual trigger + stub executor
-- [ ] **B — brains**: GHA webhook receiver, cron scheduler, Dagger executor + first module
+- [ ] **B — brains**: ~~Dagger executor~~ ✅ · GHA webhook receiver · cron scheduler · standalone pipeline modules
 - [ ] **C — senses**: OTel wiring, health dashboard, metrics
 - [ ] **D — catalog**: ArgoCD/K8s views, scorecards, notifications

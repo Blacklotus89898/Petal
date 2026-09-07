@@ -79,6 +79,14 @@ flowchart LR
   `web/dist/index.html` keeps the tree compilable before the first frontend build.
 - Phase A ships a stub executor behind the `executor.Executor` interface; the Dagger
   executor is a drop-in replacement (no scheduler/API changes).
+- Phase B interim: pipelines are Go functions in an executor registry
+  (`internal/executor/dagger.go`, host SDK) rather than standalone modules — the
+  dagger CLI is not yet standard in the toolchain. Standalone modules under
+  `pipelines/` remain the target form; see `pipelines/README.md`.
+- The Dagger engine requires a container runtime at execution time. A missing
+  runtime fails the run cleanly (recorded, retriable) — it must never hang or
+  crash the scheduler. Verified: engine-down runs fail at the SDK connect
+  timeout with a clear error in the registry.
 
 ## Phases
 
