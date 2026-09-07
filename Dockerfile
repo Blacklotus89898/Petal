@@ -18,18 +18,9 @@ COPY . .
 COPY --from=web /src/web/dist ./web/dist
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/petal .
 
-# Stage 3: static docker CLI — Dagger's engine "image" driver shells out to
-# `docker` to run the engine as a sibling container. Must be the static build
-# (distroless has no libc loader for the musl-linked apk package).
-FROM alpine:3.20 AS dockercli
-ARG DOCKER_CLI_VERSION=27.3.1
-RUN wget -qO- "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz" \
-    | tar xz --strip-components=1 -C /etc docker/docker
-
-# Stage 4: minimal runtime
+# Stage 3: minimal runtime
 FROM gcr.io/distroless/static-debian12
 COPY --from=build /out/petal /petal
-COPY --from=dockercli /etc/docker /usr/local/bin/docker
 EXPOSE 8080
 VOLUME ["/data"]
 ENTRYPOINT ["/petal"]

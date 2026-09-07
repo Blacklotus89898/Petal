@@ -1,0 +1,28 @@
+# The dogfood pipeline: Petal builds Petal. Lives in this repo's
+# .petal/pipelines/ so the petal control plane discovers it from the git-synced
+# workdir and executes each step as a container against the DinD sidecar
+# (ADR 0002). Params become PARAM_* env vars inside steps.
+name: docker-image
+description: Build and publish the project container image
+
+params:
+  ref:
+    # Default ref is an ephemeral ttl.sh image (no credentials needed);
+    # override per run with args {"ref": "ghcr.io/blacklotus89898/petal:<tag>"}.
+    default: ttl.sh/petal-${PETAL_RUN_ID}:1h
+
+steps:
+  - name: build
+    # docker:27-cli has buildx and talks to the dind sidecar via DOCKER_HOST.
+    image: docker:27-cli
+    run: |
+      docker buildx build \
+        --file Dockerfile \
+        --tag "$PARAM_REF" \
+        --push \
+        /src
+      mkdir -p .petal-out
+      printf '%s\n' "$PARAM_REF" > .petal-out/image-ref.txt
+
+outputs:
+  image-ref: .petal-out/image-ref.txt

@@ -1,7 +1,9 @@
 # ADR 0001: Petal architecture — control plane over a Dagger execution layer
 
 Date: 2026-09-06
-Status: Accepted
+Status: Accepted (execution layer superseded by [ADR 0002](0002-step-runner.md) —
+the Dagger SDK executor was replaced by the first-party step-runner; all other
+decisions stand)
 
 ## Context
 

@@ -1,5 +1,5 @@
-// Package executor runs pipelines. Phase A ships Stub; the Dagger executor
-// (Phase A+) is a drop-in replacement behind this interface.
+// Package executor runs pipelines behind a single interface: Stub simulates
+// (Phase A), Steps executes real pipelines via the Docker API (ADR 0002).
 package executor
 
 import (

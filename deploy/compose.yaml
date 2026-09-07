@@ -1,9 +1,9 @@
-# Petal with the real Dagger executor.
+# Petal with the real step-runner executor (ADR 0002).
 #
-# Why a container even for local dev: the Dagger engine is a Linux container
-# and cannot be provisioned from a native Windows process. Running Petal as a
-# Linux container against the same daemon keeps the dev loop identical to the
-# k3s deployment (same image, same engine-over-socket pattern as DinD pods).
+# Steps run as sibling containers via the mounted daemon socket (DOCKER_HOST),
+# which is also why Petal itself runs as a Linux container on Windows dev
+# boxes: path handling for bind mounts is Linux-native here, same as the k3s
+# deployment.
 services:
   petal:
     build:
@@ -12,17 +12,13 @@ services:
       - "8080:8080"
     environment:
       DOCKER_HOST: unix:///var/run/docker.sock
-      # The engine session needs writable cache dirs; distroless ships none.
-      HOME: /tmp
-      TMPDIR: /tmp
-      TMP: /tmp
-    command: ["-db", "/data/petal.db", "-executor", "dagger", "-workdir", "/src"]
+    command: ["-db", "/data/petal.db", "-data", "/data", "-executor", "steps", "-workdir", "/src"]
     volumes:
       - petal-data:/data
-      # Engine provisioning: Petal creates sibling engine containers via the
-      # daemon socket (same role as the DinD sidecar in the k3s deployment).
+      # Step containers are created as siblings via the daemon socket (same
+      # role as the DinD sidecar in the k3s deployment).
       - /var/run/docker.sock:/var/run/docker.sock
-      # Dogfood source: pipelines build from the mounted repo checkout.
+      # Pipeline source: the catalog is discovered at /src/.petal/pipelines/.
       - ..:/src
     restart: unless-stopped
 
