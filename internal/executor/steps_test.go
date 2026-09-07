@@ -11,6 +11,25 @@ import (
 	"github.com/Blacklotus89898/Petal/internal/runs"
 )
 
+func TestStepNetworkMode(t *testing.T) {
+	cases := []struct {
+		host string
+		want string
+	}{
+		{"tcp://127.0.0.1:2375", "host"},  // DinD sidecar: loopback must resolve
+		{"tcp://localhost:2375", "host"},  // same, by name
+		{"unix:///var/run/docker.sock", ""}, // socket daemon: default bridge is right
+		{"tcp://10.0.0.5:2375", ""},       // remote daemon: default bridge is right
+		{"", ""},                          // unset: default bridge
+		{"not a url %", ""},               // unparseable: fail open to default
+	}
+	for _, c := range cases {
+		if got := stepNetworkMode(c.host); got != c.want {
+			t.Errorf("stepNetworkMode(%q) = %q, want %q", c.host, got, c.want)
+		}
+	}
+}
+
 func TestParseArgs(t *testing.T) {
 	got, err := parseArgs(`{"ref":"ghcr.io/x:1","count":3,"flag":true}`)
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -144,6 +145,26 @@ func (s *Steps) Execute(ctx context.Context, run runs.Run) Result {
 	return out
 }
 
+// stepNetworkMode picks the network for a step container. When DOCKER_HOST is
+// a loopback address (the DinD sidecar pattern, tcp://127.0.0.1:2375), steps
+// that drive Docker themselves — docker:27-cli builds, for instance — reach
+// the daemon over 127.0.0.1, which from a bridge-network container is the
+// container's own loopback, not the daemon's. Host networking puts the step
+// in the daemon's netns so loopback resolves. With a unix socket or a
+// non-loopback DOCKER_HOST, the daemon's default bridge is correct.
+func stepNetworkMode(dockerHost string) string {
+	u, err := url.Parse(dockerHost)
+	if err != nil {
+		return ""
+	}
+	switch u.Hostname() {
+	case "127.0.0.1", "localhost", "::1":
+		return "host"
+	default:
+		return ""
+	}
+}
+
 // runStep pulls the image, creates and starts the container, streams
 // stdout/stderr into the step's log file, waits, and removes the container.
 func (s *Steps) runStep(ctx context.Context, runID string, step pipeline.Step, workDir, logDir string, baseEnv map[string]string) (exit int, err error) {
@@ -154,7 +175,11 @@ func (s *Steps) runStep(ctx context.Context, runID string, step pipeline.Step, w
 		return -1, fmt.Errorf("open log: %w", err)
 	}
 	defer logFile.Close()
-	fmt.Fprintf(logFile, "$ docker run --workdir /src --env (see events) %s\n", step.Image)
+	if net := stepNetworkMode(s.dockerHost); net != "" {
+		fmt.Fprintf(logFile, "$ docker run --network %s --workdir /src --env (see events) %s\n", net, step.Image)
+	} else {
+		fmt.Fprintf(logFile, "$ docker run --workdir /src --env (see events) %s\n", step.Image)
+	}
 
 	// Pull first so create/start failures are unambiguous, with progress in
 	// the step log (the dind layer cache makes repeat pulls cheap).
@@ -181,6 +206,7 @@ func (s *Steps) runStep(ctx context.Context, runID string, step pipeline.Step, w
 		WorkingDir: "/src",
 		Labels:     map[string]string{"petal.run": runID, "petal.step": step.Name},
 	}, &container.HostConfig{
+		NetworkMode: container.NetworkMode(stepNetworkMode(s.dockerHost)),
 		Mounts: []mount.Mount{{
 			Type:   mount.TypeBind,
 			Source: workDir,
