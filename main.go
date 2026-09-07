@@ -29,10 +29,14 @@ var webFS embed.FS
 func main() {
 	addr := flag.String("addr", ":8080", "listen address")
 	dbPath := flag.String("db", "data/petal.db", "SQLite database path")
+	dataDir := flag.String("data", "", "data root for run logs and workspaces (default: db directory)")
 	workers := flag.Int("workers", 2, "executor worker count")
-	execName := flag.String("executor", "stub", "executor: stub or dagger")
-	workdir := flag.String("workdir", ".", "source workdir for pipelines (dagger executor)")
+	execName := flag.String("executor", "stub", "executor: stub or steps")
+	workdir := flag.String("workdir", ".", "source workdir pipelines are loaded from (steps executor)")
 	flag.Parse()
+	if *dataDir == "" {
+		*dataDir = filepath.Dir(*dbPath)
+	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -51,8 +55,8 @@ func main() {
 	defer store.Close()
 
 	var exec executor.Executor = executor.Stub{}
-	if *execName == "dagger" {
-		exec = executor.NewDagger(*workdir, logger)
+	if *execName == "steps" {
+		exec = executor.NewSteps(store, *workdir, *dataDir, os.Getenv("DOCKER_HOST"), logger)
 	}
 	logger.Info("executor selected", "executor", exec.Name())
 
