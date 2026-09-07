@@ -60,7 +60,7 @@ func main() {
 	go pool.Start(ctx)
 
 	mux := http.NewServeMux()
-	api.Register(mux, store)
+	api.Register(mux, store, api.Options{TriggerToken: os.Getenv("PETAL_TRIGGER_TOKEN")})
 	mux.Handle("/", spaHandler())
 
 	srv := &http.Server{

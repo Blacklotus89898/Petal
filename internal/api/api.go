@@ -12,16 +12,25 @@ import (
 
 // Server handles /api/* requests.
 type Server struct {
-	store *runs.Store
+	store        *runs.Store
+	triggerToken string
+}
+
+// Options configures optional API features.
+type Options struct {
+	// TriggerToken enables the signed webhook trigger endpoint (POST
+	// /api/triggers/github). Empty disables it.
+	TriggerToken string
 }
 
 // Register wires the API routes onto mux.
-func Register(mux *http.ServeMux, store *runs.Store) {
-	s := &Server{store: store}
+func Register(mux *http.ServeMux, store *runs.Store, opts Options) {
+	s := &Server{store: store, triggerToken: opts.TriggerToken}
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.HandleFunc("GET /api/runs", s.listRuns)
 	mux.HandleFunc("POST /api/runs", s.createRun)
 	mux.HandleFunc("GET /api/runs/{id}", s.getRun)
+	mux.HandleFunc("POST /api/triggers/github", s.handleGitHubTrigger)
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {

@@ -98,7 +98,21 @@ The container is a distroless static image (~20MB) — no OS packages, no shell.
 | GET | `/api/health` | Liveness probe |
 | GET | `/api/runs?limit=50` | Recent runs |
 | POST | `/api/runs` | Trigger a run: `{"pipeline":"docker-image","module_fn":"build","args":{}}` — optional `dedup_key` for at-least-once dedup |
+| POST | `/api/triggers/github` | Signed webhook (HMAC-SHA256, header `X-Petal-Signature`) for CI triggers; enables with `PETAL_TRIGGER_TOKEN` env; dedups on `git_sha:pipeline` |
 | GET | `/api/runs/{id}` | Run detail + audit events |
+
+### Wiring GitHub Actions → Petal
+
+`.github/workflows/petal-trigger.yaml` sends a signed trigger on every push to
+`main`. To activate:
+
+1. Generate a token: `openssl rand -hex 32`, run Petal with
+   `PETAL_TRIGGER_TOKEN=<token>`
+2. In the GitHub repo: **Settings → Secrets and variables → Actions** — add
+   secrets `PETAL_URL` (where Petal is reachable from runners) and
+   `PETAL_TRIGGER_TOKEN`, and set variable `PETAL_ENABLED=true`
+3. Push — the run appears in Petal with trigger `webhook` and the GHA run URL
+   as its source
 
 ## Layout
 
