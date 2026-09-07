@@ -174,6 +174,12 @@ func (s *Store) Finish(ctx context.Context, id, status, errMsg string) error {
 	return err
 }
 
+// SetGitSHA records the commit a run belongs to (traceability spine).
+func (s *Store) SetGitSHA(ctx context.Context, id, sha string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE runs SET git_sha = ? WHERE id = ?`, sha, id)
+	return err
+}
+
 // Get returns a run by ID.
 func (s *Store) Get(ctx context.Context, id string) (*Run, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+runColumns+` FROM runs WHERE id = ?`, id)

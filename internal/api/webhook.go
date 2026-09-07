@@ -65,6 +65,13 @@ func (s *Server) handleGitHubTrigger(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if req.GitSHA != "" {
+		if err := s.store.SetGitSHA(r.Context(), run.ID, req.GitSHA); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		run.GitSHA = req.GitSHA
+	}
 	writeJSON(w, http.StatusCreated, run)
 }
 
