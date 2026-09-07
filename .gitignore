@@ -1,0 +1,18 @@
+# Go
+*.exe
+petal
+petal.exe
+
+# Frontend
+node_modules/
+web/dist/*
+!web/dist/index.html
+
+# Runtime state
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Secrets / local
+.env

@@ -1,0 +1,6 @@
+# Dev happens on Windows; deploy targets Debian k3s. Force LF everywhere so
+# manifests and scripts never hit CRLF issues on Linux.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
