@@ -38,7 +38,7 @@ func newCatalogTestMux(t *testing.T) *http.ServeMux {
 	}
 
 	mux := http.NewServeMux()
-	Register(mux, store, Options{Workdir: workdir, DataDir: dataDir})
+	Register(mux, store, Options{APIToken: testAPIToken, Workdir: workdir, DataDir: dataDir})
 	return mux
 }
 

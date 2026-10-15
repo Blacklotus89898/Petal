@@ -25,6 +25,24 @@ func (s *Server) listPipelines(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, specs)
 }
 
+// pipelineExists reports whether name is in the workdir catalog. Without a
+// workdir (stub-only setups) every name is accepted, as before.
+func (s *Server) pipelineExists(name string) (bool, error) {
+	if s.workdir == "" {
+		return true, nil
+	}
+	specs, err := pipeline.List(s.workdir)
+	if err != nil {
+		return false, err
+	}
+	for _, p := range specs {
+		if p.Name == name {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // stepLogs streams a step's log file (text/plain, partial logs included
 // while the step is still running).
 func (s *Server) stepLogs(w http.ResponseWriter, r *http.Request) {

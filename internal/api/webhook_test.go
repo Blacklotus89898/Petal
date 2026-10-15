@@ -23,8 +23,17 @@ func newTestMux(t *testing.T, token string) *http.ServeMux {
 	}
 	t.Cleanup(func() { store.Close() })
 	mux := http.NewServeMux()
-	Register(mux, store, Options{TriggerToken: token})
+	Register(mux, store, Options{TriggerToken: token, APIToken: testAPIToken})
 	return mux
+}
+
+// testAPIToken is the bearer token every test mux is configured with.
+const testAPIToken = "api-secret"
+
+// authed attaches the test API bearer token to req.
+func authed(req *http.Request) *http.Request {
+	req.Header.Set("Authorization", "Bearer "+testAPIToken)
+	return req
 }
 
 func signedRequest(t *testing.T, token, body string) *http.Request {

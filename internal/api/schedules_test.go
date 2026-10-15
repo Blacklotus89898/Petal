@@ -11,22 +11,22 @@ func TestCreateScheduleValidatesCron(t *testing.T) {
 	mux := newTestMux(t, "")
 
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/schedules",
-		strings.NewReader(`{"pipeline":"docker-image","cron":"*/15 * * * *"}`)))
+	mux.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodPost, "/api/schedules",
+		strings.NewReader(`{"pipeline":"docker-image","cron":"*/15 * * * *"}`))))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
 	}
 
 	bad := httptest.NewRecorder()
-	mux.ServeHTTP(bad, httptest.NewRequest(http.MethodPost, "/api/schedules",
-		strings.NewReader(`{"pipeline":"docker-image","cron":"sometimes"}`)))
+	mux.ServeHTTP(bad, authed(httptest.NewRequest(http.MethodPost, "/api/schedules",
+		strings.NewReader(`{"pipeline":"docker-image","cron":"sometimes"}`))))
 	if bad.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for bad cron, got %d", bad.Code)
 	}
 
 	noPipeline := httptest.NewRecorder()
-	mux.ServeHTTP(noPipeline, httptest.NewRequest(http.MethodPost, "/api/schedules",
-		strings.NewReader(`{"cron":"* * * * *"}`)))
+	mux.ServeHTTP(noPipeline, authed(httptest.NewRequest(http.MethodPost, "/api/schedules",
+		strings.NewReader(`{"cron":"* * * * *"}`))))
 	if noPipeline.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for missing pipeline, got %d", noPipeline.Code)
 	}
@@ -36,8 +36,8 @@ func TestListAndDeleteSchedule(t *testing.T) {
 	mux := newTestMux(t, "")
 
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/schedules",
-		strings.NewReader(`{"pipeline":"docker-image","module_fn":"build","args":{"ref":"x"},"cron":"0 4 * * *"}`)))
+	mux.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodPost, "/api/schedules",
+		strings.NewReader(`{"pipeline":"docker-image","module_fn":"build","args":{"ref":"x"},"cron":"0 4 * * *"}`))))
 	body := rec.Body.String()
 	id := body[strings.Index(body, `"id":"`)+len(`"id":"`):]
 	id = id[:strings.Index(id, `"`)]
@@ -49,7 +49,7 @@ func TestListAndDeleteSchedule(t *testing.T) {
 	}
 
 	del := httptest.NewRecorder()
-	mux.ServeHTTP(del, httptest.NewRequest(http.MethodDelete, "/api/schedules/"+id, nil))
+	mux.ServeHTTP(del, authed(httptest.NewRequest(http.MethodDelete, "/api/schedules/"+id, nil)))
 	if del.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d", del.Code)
 	}

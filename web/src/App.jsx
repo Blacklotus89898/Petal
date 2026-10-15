@@ -3,18 +3,14 @@ import {
   Alert,
   AppShell,
   Badge,
-  Button,
   Card,
   Code,
   Drawer,
   Group,
   Loader,
-  Modal,
   ScrollArea,
-  Select,
   Table,
   Text,
-  Textarea,
   Timeline,
   Title,
   Tooltip,
@@ -29,65 +25,6 @@ function fmtDuration(run) {
   if (!run.started_at) return '—'
   const end = run.finished_at ? new Date(run.finished_at) : new Date()
   return `${((end - new Date(run.started_at)) / 1000).toFixed(1)}s`
-}
-
-function TriggerModal({ opened, onClose, onTriggered, pipelines }) {
-  const options = (pipelines || []).map(p => ({
-    value: p.name,
-    label: p.description ? `${p.name} — ${p.description}` : p.name,
-  }))
-  const [pipeline, setPipeline] = useState('')
-  const [args, setArgs] = useState('{}')
-  const [error, setError] = useState('')
-  const [busy, setBusy] = useState(false)
-
-  useEffect(() => {
-    if (opened && !pipeline && options.length > 0) setPipeline(options[0].value)
-  }, [opened, options, pipeline])
-
-  const submit = async () => {
-    setBusy(true)
-    setError('')
-    try {
-      const parsed = JSON.parse(args || '{}')
-      const res = await fetch('/api/runs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pipeline, args: parsed }),
-      })
-      if (!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`)
-      onTriggered()
-      onClose()
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <Modal opened={opened} onClose={onClose} title="Trigger run" centered>
-      {error && <Alert color="red" mb="sm">{error}</Alert>}
-      {options.length === 0 ? (
-        <Text size="sm" c="dimmed" mb="sm">
-          No pipelines discovered in the repo's <Code>.petal/pipelines/</Code> directory.
-        </Text>
-      ) : (
-        <Select
-          label="Pipeline"
-          data={options}
-          value={pipeline}
-          onChange={setPipeline}
-          mb="sm"
-        />
-      )}
-      <Textarea label="Arguments (JSON)" value={args} onChange={e => setArgs(e.currentTarget.value)} rows={4} mb="sm" />
-      <Group justify="flex-end">
-        <Button variant="default" onClick={onClose}>Cancel</Button>
-        <Button onClick={submit} loading={busy} disabled={options.length === 0}>Run</Button>
-      </Group>
-    </Modal>
-  )
 }
 
 function eventLabel(ev) {
@@ -179,8 +116,6 @@ export default function App() {
   const [error, setError] = useState('')
   const [selectedRun, setSelectedRun] = useState(null)
   const [drawerOpened, { open: openDrawer, close: closeDrawer }] = useDisclosure(false)
-  const [modalOpened, { open: openModal, close: closeModal }] = useDisclosure(false)
-  const [interval, setInterval] = useState(5000)
 
   const refresh = useCallback(async () => {
     try {
@@ -200,9 +135,16 @@ export default function App() {
       .then(setPipelines)
       .catch(() => {})
   }, [refresh])
-  useInterval(refresh, interval)
+  useInterval(refresh, 5000)
 
   const openRun = id => { setSelectedRun(id); openDrawer() }
+
+  // Deep link: /?run=<id> opens that run's drawer (Backstage's petal:run links here).
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get('run')
+    if (id) openRun(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   return (
     <AppShell header={{ height: 56 }} padding="md">
@@ -212,7 +154,9 @@ export default function App() {
             <Title order={4}>🌸 Petal</Title>
             <Text size="xs" c="dimmed">homelab control plane</Text>
           </Group>
-          <Button size="xs" onClick={openModal}>Trigger run</Button>
+          <Tooltip label="Petal is the orchestrator; runs are triggered from Backstage, the signed webhook, or cron (ADR 0003)">
+            <Badge variant="light" color="gray">read-only console</Badge>
+          </Tooltip>
         </Group>
       </AppShell.Header>
 
@@ -222,7 +166,7 @@ export default function App() {
           {runs === null ? (
             <Group justify="center" p="xl"><Loader /></Group>
           ) : runs.length === 0 ? (
-            <Text p="xl" ta="center" c="dimmed">No runs yet — trigger one to see the pipeline lifecycle.</Text>
+            <Text p="xl" ta="center" c="dimmed">No runs yet — trigger one from Backstage to see the pipeline lifecycle.</Text>
           ) : (
             <Table highlightOnHover>
               <Table.Thead>
@@ -241,7 +185,11 @@ export default function App() {
                   <Table.Tr key={run.id} onClick={() => openRun(run.id)} style={{ cursor: 'pointer' }}>
                     <Table.Td style={{ fontFamily: 'monospace' }}>{run.id}</Table.Td>
                     <Table.Td>{run.pipeline}{run.module_fn ? `:${run.module_fn}` : ''}</Table.Td>
-                    <Table.Td><Badge variant="light" color="violet">{run.trigger_kind}</Badge></Table.Td>
+                    <Table.Td>
+                      <Tooltip label={run.trigger_source || 'no source recorded'}>
+                        <Badge variant="light" color="violet">{run.trigger_kind}</Badge>
+                      </Tooltip>
+                    </Table.Td>
                     <Table.Td>
                       <Badge color={STATUS_COLOR[run.status] || 'gray'} variant="dot">
                         {run.status}
@@ -267,12 +215,6 @@ export default function App() {
         </Text>
       </AppShell.Main>
 
-      <TriggerModal
-        opened={modalOpened}
-        onClose={closeModal}
-        onTriggered={() => { refresh(); setInterval(1000) }}
-        pipelines={pipelines}
-      />
       <RunDrawer runId={selectedRun} opened={drawerOpened} onClose={closeDrawer} />
     </AppShell>
   )

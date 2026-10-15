@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"time"
+	"unicode/utf8"
 
 	_ "modernc.org/sqlite"
 )
@@ -192,10 +193,41 @@ func (s *Store) Get(ctx context.Context, id string) (*Run, error) {
 
 // List returns the most recent runs.
 func (s *Store) List(ctx context.Context, limit int) ([]Run, error) {
-	if limit <= 0 {
-		limit = 50
+	return s.ListFiltered(ctx, Filter{Limit: limit})
+}
+
+// Filter narrows ListFiltered. Zero-value fields match everything.
+type Filter struct {
+	Limit        int
+	Pipeline     string // exact match
+	TriggerKind  string // exact match
+	SourcePrefix string // prefix match on trigger_source (e.g. "backstage:component:default/petal")
+}
+
+// ListFiltered returns the most recent runs matching f — how a portal shows
+// the runs belonging to one catalog entity.
+func (s *Store) ListFiltered(ctx context.Context, f Filter) ([]Run, error) {
+	if f.Limit <= 0 {
+		f.Limit = 50
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+runColumns+` FROM runs ORDER BY queued_at DESC LIMIT ?`, limit)
+	q := `SELECT ` + runColumns + ` FROM runs WHERE 1=1`
+	var args []any
+	if f.Pipeline != "" {
+		q += ` AND pipeline = ?`
+		args = append(args, f.Pipeline)
+	}
+	if f.TriggerKind != "" {
+		q += ` AND trigger_kind = ?`
+		args = append(args, f.TriggerKind)
+	}
+	if f.SourcePrefix != "" {
+		q += ` AND substr(trigger_source, 1, ?) = ?`
+		// substr counts characters, not bytes
+		args = append(args, utf8.RuneCountInString(f.SourcePrefix), f.SourcePrefix)
+	}
+	q += ` ORDER BY queued_at DESC LIMIT ?`
+	args = append(args, f.Limit)
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}

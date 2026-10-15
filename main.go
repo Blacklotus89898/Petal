@@ -67,6 +67,7 @@ func main() {
 	mux := http.NewServeMux()
 	api.Register(mux, store, api.Options{
 		TriggerToken: os.Getenv("PETAL_TRIGGER_TOKEN"),
+		APIToken:     os.Getenv("PETAL_API_TOKEN"),
 		Workdir:      *workdir,
 		DataDir:      *dataDir,
 	})
@@ -80,7 +81,8 @@ func main() {
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
-	logger.Info("petal listening", "addr", *addr, "db", *dbPath, "workers", *workers)
+	logger.Info("petal listening", "addr", *addr, "db", *dbPath, "workers", *workers,
+		"api_writes", os.Getenv("PETAL_API_TOKEN") != "")
 
 	select {
 	case <-ctx.Done():

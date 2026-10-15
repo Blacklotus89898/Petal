@@ -2,8 +2,9 @@
 
 Date: 2026-09-06
 Status: Accepted (execution layer superseded by [ADR 0002](0002-step-runner.md) —
-the Dagger SDK executor was replaced by the first-party step-runner; all other
-decisions stand)
+the Dagger SDK executor was replaced by the first-party step-runner; "replaces
+Backstage" amended by [ADR 0003](0003-backstage-portal-petal-orchestrator.md) —
+Backstage stays the portal, Petal is the orchestrator; all other decisions stand)
 
 ## Context
 

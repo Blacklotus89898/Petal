@@ -87,3 +87,42 @@ func TestListEvents(t *testing.T) {
 		t.Fatalf("expected a queued event, got %+v", events)
 	}
 }
+
+func TestListFiltered(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	mustEnqueue := func(pipeline, kind, source string) {
+		t.Helper()
+		if _, err := s.Enqueue(ctx, pipeline, "", "{}", kind, source, ""); err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+	}
+	mustEnqueue("docker-image", "backstage", "backstage:component:default/petal#user:default/jo")
+	mustEnqueue("docker-image", "backstage", "backstage:component:default/petal-docs#user:default/jo")
+	mustEnqueue("docker-image", "webhook", "gha:https://x/1")
+	mustEnqueue("lint", "api", "")
+
+	cases := []struct {
+		name string
+		f    Filter
+		want int
+	}{
+		{"all", Filter{}, 4},
+		{"pipeline", Filter{Pipeline: "docker-image"}, 3},
+		{"trigger kind", Filter{TriggerKind: "backstage"}, 2},
+		// the "#" separator keeps "petal" from matching "petal-docs"
+		{"source prefix", Filter{SourcePrefix: "backstage:component:default/petal#"}, 1},
+		{"combined", Filter{Pipeline: "lint", TriggerKind: "webhook"}, 0},
+		{"limit", Filter{Limit: 2}, 2},
+	}
+	for _, tc := range cases {
+		got, err := s.ListFiltered(ctx, tc.f)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if len(got) != tc.want {
+			t.Errorf("%s: expected %d runs, got %d", tc.name, tc.want, len(got))
+		}
+	}
+}

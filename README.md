@@ -1,7 +1,10 @@
 # Petal 🌸
 
-Homelab internal developer platform: a control plane for repo-native CI/CD
-pipelines, replacing Backstage.
+Homelab pipeline orchestrator: a control plane for repo-native CI/CD
+pipelines. **Backstage is the portal; Petal is the orchestrator** — Backstage
+triggers Petal runs, Petal executes and remembers them
+([ADR 0003](docs/adr/0003-backstage-portal-petal-orchestrator.md)). The portal
+role moves into Petal incrementally.
 
 **Principle:** *Petal decides and remembers; Docker runs; YAML describes.*
 Petal schedules, deduplicates, records, and reports pipeline runs; pipelines
@@ -17,7 +20,7 @@ flowchart LR
   subgraph Triggers["Triggers"]
     GHA["GitHub Actions webhook"]
     CRON["Petal scheduler (cron)"]
-    UI["Manual (UI)"]
+    BS["Backstage (petal:run action)"]
   end
 
   subgraph Petal["Petal control plane — one Go binary"]
@@ -41,7 +44,7 @@ flowchart LR
 
   GHA --> API
   CRON --> SCHED
-  UI --> API
+  BS --> API
   API --> REG
   SCHED --> REG
   SCHED --> EXEC
@@ -51,9 +54,10 @@ flowchart LR
   API -. "read-only views" .-> ARGO
 ```
 
-See [docs/adr/0001-architecture.md](docs/adr/0001-architecture.md) and
-[docs/adr/0002-step-runner.md](docs/adr/0002-step-runner.md) for the decision
-log.
+See [ADR 0001](docs/adr/0001-architecture.md),
+[ADR 0002](docs/adr/0002-step-runner.md) and
+[ADR 0003](docs/adr/0003-backstage-portal-petal-orchestrator.md) for the
+decision log.
 
 ## Pipelines
 
@@ -111,7 +115,13 @@ npm install   # first time only
 npm run dev
 ```
 
-Open http://localhost:5173 and trigger a run.
+Open http://localhost:5173. The UI is a read-only console; trigger runs through
+the API (set `PETAL_API_TOKEN` first):
+
+```powershell
+$env:PETAL_API_TOKEN = "dev"; go run .
+curl -X POST localhost:8080/api/runs -H "Authorization: Bearer dev" -d '{"pipeline":"docker-image"}'
+```
 
 ### Real pipelines
 
@@ -152,15 +162,19 @@ The container is a distroless static image (~20MB) — no OS packages, no shell.
 |---|---|---|
 | GET | `/api/health` | Liveness probe |
 | GET | `/api/pipelines` | Pipeline catalog discovered in the workdir |
-| GET | `/api/runs?limit=50` | Recent runs |
-| POST | `/api/runs` | Trigger a run: `{"pipeline":"docker-image","args":{}}` — optional `dedup_key` for at-least-once dedup |
+| GET | `/api/runs?limit=50` | Recent runs; filters `pipeline=`, `trigger_kind=`, `source=` (trigger_source prefix, e.g. `backstage:component:default/petal%23`) |
+| POST | `/api/runs` | 🔒 Trigger a run: `{"pipeline":"docker-image","args":{}}` — optional `trigger_kind` (`api`\|`backstage`), `trigger_source`, `dedup_key`; unknown pipeline → 404 |
 | GET | `/api/runs/{id}` | Run detail + audit events (step.started / step.finished / output) |
 | GET | `/api/runs/{id}/logs/{step}` | Step log (text/plain, live while the step runs) |
 | POST | `/api/triggers/github` | Signed webhook (HMAC-SHA256, header `X-Petal-Signature`) for CI triggers; enables with `PETAL_TRIGGER_TOKEN` env; dedups on `git_sha:pipeline` |
 | GET | `/api/schedules` | List cron schedules |
-| POST | `/api/schedules` | Create a schedule: `{"pipeline":"docker-image","cron":"*/15 * * * *","args":{}}` |
-| DELETE | `/api/schedules/{id}` | Delete a schedule |
-| POST | `/api/schedules/{id}/toggle` | Enable/disable a schedule |
+| POST | `/api/schedules` | 🔒 Create a schedule: `{"pipeline":"docker-image","cron":"*/15 * * * *","args":{}}` |
+| DELETE | `/api/schedules/{id}` | 🔒 Delete a schedule |
+| POST | `/api/schedules/{id}/toggle` | 🔒 Enable/disable a schedule |
+
+🔒 = requires `Authorization: Bearer $PETAL_API_TOKEN`. With no token
+configured these endpoints return 503 — an open port never means an open
+trigger. Reads stay open on the LAN (ADR 0003).
 
 ### Wiring GitHub Actions → Petal
 
@@ -195,6 +209,9 @@ docs/adr/                     # architecture decision records
 
 - [x] **A — walking skeleton**: binary + UI + registry + manual trigger + stub executor
 - [x] **B — brains**: ~~GHA webhook receiver~~ ✅ · ~~cron scheduler~~ ✅ · repo-native pipeline spec + step-runner executor (ADR 0002) ✅
+- [x] **Orchestrator contract** (ADR 0003): bearer-token API, trigger provenance, run filters, read-only console
+- [ ] **Backstage integration**: `petal:run` scaffolder action + "Run Petal pipeline" template (Homelab repo)
+- [ ] **Multi-repo runs**: `repo@ref` per run, cloned in a throwaway container, repo allowlist
 - [ ] **C — senses**: OTel wiring, health dashboard, metrics
 - [ ] **D — catalog**: ArgoCD/K8s views, scorecards, notifications
 - [ ] **v2 executor ideas**: `uses:` step library (`.petal/steps/*.yaml`), petal CLI scaffolding
