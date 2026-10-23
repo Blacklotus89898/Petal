@@ -210,7 +210,7 @@ docs/adr/                     # architecture decision records
 - [x] **A — walking skeleton**: binary + UI + registry + manual trigger + stub executor
 - [x] **B — brains**: ~~GHA webhook receiver~~ ✅ · ~~cron scheduler~~ ✅ · repo-native pipeline spec + step-runner executor (ADR 0002) ✅
 - [x] **Orchestrator contract** (ADR 0003): bearer-token API, trigger provenance, run filters, read-only console
-- [ ] **Backstage integration**: `petal:run` scaffolder action + "Run Petal pipeline" template (Homelab repo)
+- [x] **Backstage integration**: `petal:run` scaffolder action, "Run a Petal pipeline" template with a live pipeline picker, "Petal runs" entity card (Homelab repo, 2026-10-23)
 - [ ] **Multi-repo runs**: `repo@ref` per run, cloned in a throwaway container, repo allowlist
 - [ ] **C — senses**: OTel wiring, health dashboard, metrics
 - [ ] **D — catalog**: ArgoCD/K8s views, scorecards, notifications

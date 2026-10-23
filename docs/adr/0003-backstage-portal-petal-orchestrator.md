@@ -57,10 +57,12 @@ story. The two systems are good at different things.
 - **Positive:** one portal, one orchestrator, no duplicate UI work; direct
   unauthenticated calls to Petal's write API are closed; every run records
   who/what started it; `/?run=<id>` deep-links a run in the console.
-- **Not yet closed — the trigger surface moves to Backstage:** Backstage
-  currently signs everyone in as guest and runs the allow-all permission
-  policy, so anyone who can reach the Backstage UI can run the Petal template
-  and start a privileged build. The token only stops callers that bypass
+- **Not yet closed — the trigger surface moves to Backstage:** Backstage runs
+  the allow-all permission policy, so every *signed-in* user can run the Petal
+  template and start a privileged build. (Corrected 2026-10-23: sign-in is
+  GitHub OAuth with the `usernameMatchingUserEntityName` resolver, so only
+  GitHub users with a User entity in `catalog/users.yaml` — today one — can
+  sign in at all; the guest provider was removed earlier.) The token only stops callers that bypass
   Backstage. What actually closes it: authentik sign-in for Backstage plus a
   real permission policy on the `petal:run` action (Homelab roadmap, OIDC item).
 - **Negative / accepted:** a shared bearer token (sealed in both namespaces)
@@ -80,7 +82,13 @@ story. The two systems are good at different things.
   `https://petal.lab.home/?run=<id>` console link.
 - Scripted callers use a scoped Backstage `externalAccess` token (subject
   `automation`, scaffolder + catalog only); their runs carry no user, so the
-  source reads `backstage:<entity>#unknown`.
+  source reads `backstage:<entity>#unknown`. Scope note: scaffolder access
+  means *every* template, including `homelab-service` (publishes to GitHub
+  with the integration token) — the token is as strong as the templates.
+- **Single-repo limit:** Petal runs pipelines only from its own git-synced
+  repo, so the template's component picker is restricted to
+  `component:default/petal` — another component would record a Petal
+  self-build as its run. Multi-repo runs (`repo@ref` + allowlist) lift this.
 - Verified end to end by `tools/petal-e2e/run.sh` (Homelab): first run
   `run_7bd4f3989cb49f1a`, docker-image, succeeded; the per-entity source
   filter returns it.
