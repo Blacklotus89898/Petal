@@ -1,6 +1,6 @@
 # ADR 0003: Backstage is the portal, Petal is the orchestrator
 
-**Status:** Accepted (2026-10-15)
+**Status:** Accepted (2026-10-15) — trigger path live 2026-10-23 (see Implementation)
 **Amends:** [ADR 0001](0001-architecture.md) — Petal no longer replaces Backstage
 in one step; the portal role moves to Petal incrementally, if and when it earns it.
 
@@ -70,3 +70,17 @@ story. The two systems are good at different things.
   services).
 - **Trust boundary unchanged from ADR 0002:** whoever holds the token can run
   containers on the worker via the privileged DinD sidecar.
+
+## Implementation (2026-10-23)
+
+- `petal:run` is an inline backend module in the Homelab repo
+  (`backstage/packages/backend/src/modules/petal.ts`), template
+  `templates/petal-run`. It sends `dedup_key: backstage-task:<task id>` so a
+  scaffolder retry cannot queue a second build, and returns the run id plus a
+  `https://petal.lab.home/?run=<id>` console link.
+- Scripted callers use a scoped Backstage `externalAccess` token (subject
+  `automation`, scaffolder + catalog only); their runs carry no user, so the
+  source reads `backstage:<entity>#unknown`.
+- Verified end to end by `tools/petal-e2e/run.sh` (Homelab): first run
+  `run_7bd4f3989cb49f1a`, docker-image, succeeded; the per-entity source
+  filter returns it.
