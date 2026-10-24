@@ -16,12 +16,12 @@ func TestStepNetworkMode(t *testing.T) {
 		host string
 		want string
 	}{
-		{"tcp://127.0.0.1:2375", "host"},  // DinD sidecar: loopback must resolve
-		{"tcp://localhost:2375", "host"},  // same, by name
+		{"tcp://127.0.0.1:2375", "host"},    // DinD sidecar: loopback must resolve
+		{"tcp://localhost:2375", "host"},    // same, by name
 		{"unix:///var/run/docker.sock", ""}, // socket daemon: default bridge is right
-		{"tcp://10.0.0.5:2375", ""},       // remote daemon: default bridge is right
-		{"", ""},                          // unset: default bridge
-		{"not a url %", ""},               // unparseable: fail open to default
+		{"tcp://10.0.0.5:2375", ""},         // remote daemon: default bridge is right
+		{"", ""},                            // unset: default bridge
+		{"not a url %", ""},                 // unparseable: fail open to default
 	}
 	for _, c := range cases {
 		if got := stepNetworkMode(c.host); got != c.want {

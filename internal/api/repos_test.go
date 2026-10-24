@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Blacklotus89898/Petal/internal/pipeline"
 	"github.com/Blacklotus89898/Petal/internal/repos"
 	"github.com/Blacklotus89898/Petal/internal/runs"
 )
@@ -94,5 +95,35 @@ func TestListRepos(t *testing.T) {
 	}
 	if rec.Code != http.StatusOK || len(got) != 1 || got[0].Alias != "homelab" || got[0].DefaultRef != "main" {
 		t.Errorf("GET /api/repos = %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestListPipelinesForRepo(t *testing.T) {
+	store, err := runs.Open(context.Background(), filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	var asked string
+	mux := http.NewServeMux()
+	Register(mux, store, Options{
+		Workdir: t.TempDir(),
+		Repos:   repos.Allowlist{"homelab": {Alias: "homelab", URL: "https://x/h.git", DefaultRef: "main"}},
+		RepoPipelines: func(_ context.Context, alias string) ([]*pipeline.Pipeline, error) {
+			asked = alias
+			return []*pipeline.Pipeline{{Name: "validate", Description: "lint"}}, nil
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/pipelines?repo=homelab", nil))
+	if rec.Code != http.StatusOK || asked != "homelab" || !strings.Contains(rec.Body.String(), `"validate"`) {
+		t.Errorf("repo listing = %d %s (asked %q)", rec.Code, rec.Body, asked)
+	}
+
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/pipelines?repo=evil", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("unknown repo: expected 400, got %d", rec.Code)
 	}
 }

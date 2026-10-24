@@ -3,12 +3,14 @@
 package api
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/Blacklotus89898/Petal/internal/pipeline"
 	"github.com/Blacklotus89898/Petal/internal/repos"
 	"github.com/Blacklotus89898/Petal/internal/runs"
 )
@@ -21,7 +23,12 @@ type Server struct {
 	workdir      string // pipeline catalog source (steps executor)
 	dataDir      string // step log files live under <dataDir>/logs
 	repos        repos.Allowlist
+	repoPipes    RepoPipelinesFunc
 }
+
+// RepoPipelinesFunc lists the pipelines in an allowlisted repo (the steps
+// executor's cached sparse clone). Nil disables GET /api/pipelines?repo=.
+type RepoPipelinesFunc func(ctx context.Context, alias string) ([]*pipeline.Pipeline, error)
 
 // Options configures optional API features.
 type Options struct {
@@ -40,16 +47,19 @@ type Options struct {
 	// Repos is the multi-repo allowlist (ADR 0004): the repos a run may name.
 	// Empty means self-repo runs only.
 	Repos repos.Allowlist
+	// RepoPipelines backs GET /api/pipelines?repo=<alias>.
+	RepoPipelines RepoPipelinesFunc
 }
 
 // Register wires the API routes onto mux.
 func Register(mux *http.ServeMux, store *runs.Store, opts Options) {
-	s := &Server{store: store, triggerToken: opts.TriggerToken, apiToken: opts.APIToken, workdir: opts.Workdir, dataDir: opts.DataDir, repos: opts.Repos}
+	s := &Server{store: store, triggerToken: opts.TriggerToken, apiToken: opts.APIToken, workdir: opts.Workdir, dataDir: opts.DataDir, repos: opts.Repos, repoPipes: opts.RepoPipelines}
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.HandleFunc("GET /api/runs", s.listRuns)
 	mux.HandleFunc("POST /api/runs", s.requireToken(s.createRun))
 	mux.HandleFunc("GET /api/runs/{id}", s.getRun)
 	mux.HandleFunc("GET /api/repos", s.listRepos)
+	mux.HandleFunc("GET /metrics", s.metrics) // Prometheus exposition (VMServiceScrape in Homelab)
 	if s.workdir != "" {
 		mux.HandleFunc("GET /api/pipelines", s.listPipelines)
 	}

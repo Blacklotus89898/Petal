@@ -3,8 +3,10 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
+	"github.com/Blacklotus89898/Petal/internal/repos"
 	"github.com/Blacklotus89898/Petal/internal/runs"
 	"github.com/Blacklotus89898/Petal/internal/scheduler"
 )
@@ -14,6 +16,8 @@ type createScheduleRequest struct {
 	ModuleFn string         `json:"module_fn"`
 	Args     map[string]any `json:"args"`
 	Cron     string         `json:"cron"`
+	Repo     string         `json:"repo"` // allowlist alias; "" = self repo (ADR 0004)
+	Ref      string         `json:"ref"`
 }
 
 func (s *Server) listSchedules(w http.ResponseWriter, r *http.Request) {
@@ -47,8 +51,24 @@ func (s *Server) createSchedule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid cron expression: "+err.Error())
 		return
 	}
+	if req.Repo != "" {
+		if _, ok := s.repos[req.Repo]; !ok {
+			writeError(w, http.StatusBadRequest, "unknown repo "+strconv.Quote(req.Repo)+" (not in the allowlist)")
+			return
+		}
+		if req.Ref != "" && !repos.ValidRef(req.Ref) {
+			writeError(w, http.StatusBadRequest, "invalid ref "+strconv.Quote(req.Ref))
+			return
+		}
+	} else if req.Ref != "" {
+		writeError(w, http.StatusBadRequest, "ref needs a repo")
+		return
+	}
 	args, _ := json.Marshal(req.Args)
-	sch, err := s.store.CreateSchedule(r.Context(), req.Pipeline, req.ModuleFn, string(args), req.Cron, next.UTC().Format(time.RFC3339Nano))
+	sch, err := s.store.AddSchedule(r.Context(), runs.NewSchedule{
+		Pipeline: req.Pipeline, ModuleFn: req.ModuleFn, ArgsJSON: string(args), Cron: req.Cron,
+		Repo: req.Repo, Ref: req.Ref,
+	}, next.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

@@ -76,3 +76,36 @@ func TestValidRef(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadConfigSchedules(t *testing.T) {
+	c, err := LoadConfig(write(t, `
+repos:
+  homelab:
+    url: https://github.com/Blacklotus89898/Homelab.git
+schedules:
+  - id: homelab-validate-nightly
+    repo: homelab
+    pipeline: validate
+    cron: "17 3 * * *"
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Schedules) != 1 || c.Schedules[0].Repo != "homelab" || c.Schedules[0].Cron != "17 3 * * *" {
+		t.Errorf("schedules = %+v", c.Schedules)
+	}
+
+	bad := map[string]string{
+		"unlisted repo": "schedules:\n  - {id: a, repo: nope, pipeline: p, cron: '* * * * *'}\n",
+		"ref, no repo":  "schedules:\n  - {id: a, ref: main, pipeline: p, cron: '* * * * *'}\n",
+		"duplicate id":  "schedules:\n  - {id: a, pipeline: p, cron: '* * * * *'}\n  - {id: a, pipeline: q, cron: '* * * * *'}\n",
+		"missing cron":  "schedules:\n  - {id: a, pipeline: p}\n",
+		"bad id":        "schedules:\n  - {id: Nightly_1, pipeline: p, cron: '* * * * *'}\n",
+		"unknown field": "schedules:\n  - {id: a, pipeline: p, cron: '* * * * *', enabled: false}\n",
+	}
+	for name, body := range bad {
+		if _, err := LoadConfig(write(t, body)); err == nil {
+			t.Errorf("%s: expected an error", name)
+		}
+	}
+}

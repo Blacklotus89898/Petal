@@ -87,3 +87,28 @@ func TestFireDueDisablesBadCron(t *testing.T) {
 		t.Fatal("schedule with unparseable cron should be disabled, not hot-looped")
 	}
 }
+
+// A repo schedule (ADR 0004) fires runs against that repo, not the self repo.
+func TestFireDueCarriesRepo(t *testing.T) {
+	store, err := runs.Open(context.Background(), filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	pool := NewPool(store, executor.Stub{}, 1, discardLogger())
+
+	if _, err := store.AddSchedule(context.Background(), runs.NewSchedule{
+		Pipeline: "validate", Cron: "* * * * *", Repo: "homelab", Ref: "main",
+	}, "2000-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	pool.fireDue(context.Background())
+
+	got, err := store.ListFiltered(context.Background(), runs.Filter{Repo: "homelab"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Ref != "main" || got[0].TriggerKind != "cron" {
+		t.Fatalf("expected one cron run on homelab@main, got %+v", got)
+	}
+}

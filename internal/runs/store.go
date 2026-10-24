@@ -113,6 +113,8 @@ func Open(ctx context.Context, path string) (*Store, error) {
 var addedColumns = []struct{ table, column, ddl string }{
 	{"runs", "repo", `ALTER TABLE runs ADD COLUMN repo TEXT NOT NULL DEFAULT ''`}, // ADR 0004
 	{"runs", "ref", `ALTER TABLE runs ADD COLUMN ref TEXT NOT NULL DEFAULT ''`},   // ADR 0004
+	{"schedules", "repo", `ALTER TABLE schedules ADD COLUMN repo TEXT NOT NULL DEFAULT ''`},
+	{"schedules", "ref", `ALTER TABLE schedules ADD COLUMN ref TEXT NOT NULL DEFAULT ''`},
 }
 
 func migrate(ctx context.Context, db *sql.DB) error {

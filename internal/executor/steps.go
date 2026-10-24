@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
@@ -50,6 +51,8 @@ type Steps struct {
 	dataDir    string          // PVC root: logs/ and work/ live under here
 	dockerHost string          // injected into step containers for image-building steps
 	repos      repos.Allowlist // multi-repo sources a run may name (ADR 0004)
+	catalogMu  sync.Mutex
+	catalog    map[string]catalogEntry // RepoPipelines cache, per alias
 	log        *slog.Logger
 	cli        *client.Client
 	initErr    error

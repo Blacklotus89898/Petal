@@ -1,7 +1,7 @@
-// Package repos is the multi-repo allowlist (ADR 0004): the set of git
-// repositories a run may name, by alias. The allowlist is the trust boundary —
-// pipeline YAML from any listed repo runs next to the DinD daemon — so it is
-// loaded from a file that lives in git (a ConfigMap), never from a request.
+// Package repos loads Petal's config file (a ConfigMap in git, never a
+// request): the multi-repo allowlist (ADR 0004) — the git repositories a run
+// may name, by alias; the trust boundary, since pipeline YAML from any listed
+// repo runs next to the DinD daemon — and declarative cron schedules.
 package repos
 
 import (
@@ -25,11 +25,30 @@ type Repo struct {
 // Allowlist maps alias → repo. The zero value allows nothing (self repo only).
 type Allowlist map[string]Repo
 
+// Schedule is a cron schedule declared in the config file. Petal syncs these
+// at startup (insert / update / delete), so git owns them; API-created
+// schedules are separate and untouched.
+type Schedule struct {
+	ID       string         `yaml:"id"`
+	Pipeline string         `yaml:"pipeline"`
+	Cron     string         `yaml:"cron"`
+	Repo     string         `yaml:"repo"` // "" = self repo
+	Ref      string         `yaml:"ref"`
+	Args     map[string]any `yaml:"args"`
+}
+
+// Config is the whole file.
+type Config struct {
+	Repos     Allowlist
+	Schedules []Schedule
+}
+
 type fileSpec struct {
 	Repos map[string]struct {
 		URL        string `yaml:"url"`
 		DefaultRef string `yaml:"default_ref"`
 	} `yaml:"repos"`
+	Schedules []Schedule `yaml:"schedules"`
 }
 
 var (
@@ -44,44 +63,73 @@ func ValidRef(ref string) bool {
 		!strings.HasPrefix(ref, "-") && !strings.HasPrefix(ref, "/") && !strings.HasSuffix(ref, "/")
 }
 
-// Load reads the allowlist file. A missing file is not an error: it means no
-// extra repos (the git-synced self repo still works). v1 accepts public HTTPS
-// URLs only — Petal holds no clone credentials.
+// Load reads the allowlist from the config file (schedules ignored).
 func Load(path string) (Allowlist, error) {
+	c, err := LoadConfig(path)
+	if err != nil {
+		return nil, err
+	}
+	return c.Repos, nil
+}
+
+// LoadConfig reads the config file. A missing file is not an error: it means
+// no extra repos and no declared schedules (the git-synced self repo still
+// works). v1 accepts public HTTPS URLs only — Petal holds no clone credentials.
+// Cron expressions are checked by the caller (the scheduler owns cron parsing).
+func LoadConfig(path string) (Config, error) {
+	empty := Config{Repos: Allowlist{}}
 	if path == "" {
-		return Allowlist{}, nil
+		return empty, nil
 	}
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return Allowlist{}, nil
+		return empty, nil
 	}
 	if err != nil {
-		return nil, err
+		return Config{}, err
 	}
 	var spec fileSpec
 	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
 	dec.KnownFields(true)
 	if err := dec.Decode(&spec); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+		return Config{}, fmt.Errorf("%s: %w", path, err)
 	}
 	out := Allowlist{}
 	for alias, r := range spec.Repos {
 		if !aliasRe.MatchString(alias) {
-			return nil, fmt.Errorf("%s: invalid repo alias %q (lowercase, digits, dashes)", path, alias)
+			return Config{}, fmt.Errorf("%s: invalid repo alias %q (lowercase, digits, dashes)", path, alias)
 		}
 		if !strings.HasPrefix(r.URL, "https://") {
-			return nil, fmt.Errorf("%s: repo %q: url must be https:// (public repos only in v1)", path, alias)
+			return Config{}, fmt.Errorf("%s: repo %q: url must be https:// (public repos only in v1)", path, alias)
 		}
 		ref := r.DefaultRef
 		if ref == "" {
 			ref = "main"
 		}
 		if !ValidRef(ref) {
-			return nil, fmt.Errorf("%s: repo %q: invalid default_ref %q", path, alias, ref)
+			return Config{}, fmt.Errorf("%s: repo %q: invalid default_ref %q", path, alias, ref)
 		}
 		out[alias] = Repo{Alias: alias, URL: r.URL, DefaultRef: ref}
 	}
-	return out, nil
+	seen := map[string]bool{}
+	for i, sch := range spec.Schedules {
+		switch {
+		case !aliasRe.MatchString(sch.ID):
+			return Config{}, fmt.Errorf("%s: schedule %d: invalid id %q (lowercase, digits, dashes)", path, i, sch.ID)
+		case seen[sch.ID]:
+			return Config{}, fmt.Errorf("%s: duplicate schedule id %q", path, sch.ID)
+		case sch.Pipeline == "" || sch.Cron == "":
+			return Config{}, fmt.Errorf("%s: schedule %q needs pipeline and cron", path, sch.ID)
+		case sch.Repo != "" && out[sch.Repo].URL == "":
+			return Config{}, fmt.Errorf("%s: schedule %q: repo %q is not in the allowlist", path, sch.ID, sch.Repo)
+		case sch.Repo == "" && sch.Ref != "":
+			return Config{}, fmt.Errorf("%s: schedule %q: ref needs a repo", path, sch.ID)
+		case sch.Ref != "" && !ValidRef(sch.Ref):
+			return Config{}, fmt.Errorf("%s: schedule %q: invalid ref %q", path, sch.ID, sch.Ref)
+		}
+		seen[sch.ID] = true
+	}
+	return Config{Repos: out, Schedules: spec.Schedules}, nil
 }
 
 // List returns the repos sorted by alias (stable API output).

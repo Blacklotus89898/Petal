@@ -7,13 +7,35 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/Blacklotus89898/Petal/internal/pipeline"
 )
 
-// listPipelines returns the pipeline catalog discovered in the workdir.
+// listPipelines returns the pipeline catalog discovered in the workdir, or —
+// with ?repo=<alias> — in that allowlisted repo's default ref (ADR 0004).
 func (s *Server) listPipelines(w http.ResponseWriter, r *http.Request) {
+	if alias := r.URL.Query().Get("repo"); alias != "" {
+		if _, ok := s.repos[alias]; !ok {
+			writeError(w, http.StatusBadRequest, "unknown repo "+strconv.Quote(alias)+" (not in the allowlist)")
+			return
+		}
+		if s.repoPipes == nil {
+			writeError(w, http.StatusNotImplemented, "repo pipeline listing needs the steps executor")
+			return
+		}
+		specs, err := s.repoPipes(r.Context(), alias)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		if specs == nil {
+			specs = []*pipeline.Pipeline{}
+		}
+		writeJSON(w, http.StatusOK, specs)
+		return
+	}
 	specs, err := pipeline.List(s.workdir)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

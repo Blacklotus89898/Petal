@@ -5,6 +5,8 @@ import (
 	"time"
 
 	cronlib "github.com/robfig/cron/v3"
+
+	"github.com/Blacklotus89898/Petal/internal/runs"
 )
 
 // cronEvery is how often the scheduler polls for due schedules. One-minute
@@ -45,7 +47,11 @@ func (p *Pool) fireDue(ctx context.Context) {
 		// Minute-bucket dedup key: restarts and overlapping ticks fire the
 		// schedule once per cron minute, never twice.
 		dedup := "sched:" + sch.ID + ":" + now.Truncate(time.Minute).UTC().Format(time.RFC3339)
-		run, err := p.store.Enqueue(ctx, sch.Pipeline, sch.ModuleFn, sch.ArgsJSON, "cron", "schedule:"+sch.ID, dedup)
+		run, err := p.store.Add(ctx, runs.NewRun{
+			Pipeline: sch.Pipeline, ModuleFn: sch.ModuleFn, ArgsJSON: sch.ArgsJSON,
+			TriggerKind: "cron", TriggerSource: "schedule:" + sch.ID, DedupKey: dedup,
+			Repo: sch.Repo, Ref: sch.Ref,
+		})
 		if err != nil {
 			p.log.Error("enqueue scheduled run", "schedule", sch.ID, "err", err)
 			continue
