@@ -95,6 +95,7 @@ func main() {
 		DataDir:       *dataDir,
 		Repos:         allow,
 		RepoPipelines: repoPipes,
+		CancelRunning: pool.Cancel,
 	})
 	mux.Handle("/", spaHandler())
 

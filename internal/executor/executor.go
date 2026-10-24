@@ -12,7 +12,7 @@ import (
 
 // Result is the terminal outcome of executing one run.
 type Result struct {
-	Status string // runs.StatusSucceeded or runs.StatusFailed
+	Status string // runs.StatusSucceeded, StatusFailed or StatusCanceled
 	Error  string
 	Output string // human-readable artifact (image ref, test summary, ...)
 }
@@ -44,6 +44,9 @@ func (Stub) Execute(ctx context.Context, run runs.Run) Result {
 	case <-time.After(1500 * time.Millisecond): // simulate pipeline work
 		return Result{Status: runs.StatusSucceeded}
 	case <-ctx.Done():
+		if out, ok := runOutcome(ctx); ok {
+			return out
+		}
 		return Result{Status: runs.StatusFailed, Error: "canceled: " + ctx.Err().Error()}
 	}
 }

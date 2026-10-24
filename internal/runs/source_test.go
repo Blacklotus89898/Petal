@@ -97,3 +97,33 @@ func TestFailOrphaned(t *testing.T) {
 		t.Errorf("queued runs must be left alone (they'll be claimed), got %q", q.Status)
 	}
 }
+
+func TestCancelQueued(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	queued, _ := s.Enqueue(ctx, "p", "", "{}", "api", "", "")
+	running, _ := s.Enqueue(ctx, "p", "", "{}", "api", "", "")
+	// Claim the oldest (queued) one so it's "running"; cancel must not touch it.
+	claimed, _ := s.ClaimNext(ctx)
+	if claimed.ID != queued.ID {
+		queued, running = running, queued
+	}
+
+	if ok, err := s.CancelQueued(ctx, claimed.ID); err != nil || ok {
+		t.Errorf("a running run must not be canceled by CancelQueued: (%v, %v)", ok, err)
+	}
+	other := queued
+	if other.ID == claimed.ID {
+		other = running
+	}
+	if ok, err := s.CancelQueued(ctx, other.ID); err != nil || !ok {
+		t.Fatalf("queued run: (%v, %v)", ok, err)
+	}
+	got, _ := s.Get(ctx, other.ID)
+	if got.Status != StatusCanceled || got.FinishedAt == nil {
+		t.Errorf("canceled run = %+v", got)
+	}
+	if ok, _ := s.CancelQueued(ctx, other.ID); ok {
+		t.Error("canceling twice must be a no-op")
+	}
+}

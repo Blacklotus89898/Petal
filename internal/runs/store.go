@@ -19,6 +19,7 @@ const (
 	StatusRunning   = "running"
 	StatusSucceeded = "succeeded"
 	StatusFailed    = "failed"
+	StatusCanceled  = "canceled" // ADR 0005: stopped on request
 )
 
 // Run is a single pipeline execution record.
@@ -385,4 +386,22 @@ func (s *Store) FailOrphaned(ctx context.Context) (int64, error) {
 		s.appendEvent(ctx, id, "interrupted", `{"reason":"control plane restart"}`)
 	}
 	return int64(len(ids)), nil
+}
+
+// CancelQueued cancels a run that hasn't started yet, atomically: it only
+// matches while the run is still queued, so it can't race a worker's claim.
+// Reports whether the run was canceled here (false = not queued any more).
+func (s *Store) CancelQueued(ctx context.Context, id string) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE runs SET status = 'canceled', finished_at = ?, error = 'canceled before it started' WHERE id = ? AND status = 'queued'`,
+		nowRFC(), id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil || n == 0 {
+		return false, err
+	}
+	s.appendEvent(ctx, id, StatusCanceled, `{"while":"queued"}`)
+	return true, nil
 }

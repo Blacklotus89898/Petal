@@ -21,11 +21,12 @@ import (
 // this cache — checkout always clones the run's exact ref.
 const catalogTTL = 2 * time.Minute
 
-// catalogScript fetches only .petal/pipelines of the default ref: shallow,
+// catalogScript fetches only .petal/pipelines + .petal/steps (uses: resolution,
+// ADR 0005) of the default ref: shallow,
 // blob-less and sparse, so listing a big repo costs a few KB.
 const catalogScript = `git clone --quiet --depth 1 --filter=blob:none --sparse --branch "$PETAL_REF" "$PETAL_REPO_URL" /src
 cd /src
-git sparse-checkout set --no-cone .petal/pipelines`
+git sparse-checkout set --no-cone .petal/pipelines .petal/steps`
 
 type catalogEntry struct {
 	at    time.Time

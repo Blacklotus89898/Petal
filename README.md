@@ -82,9 +82,9 @@ outputs:
   image-ref: .petal-out/image-ref.txt
 ```
 
-Rules (full spec in ADR 0002):
+Rules (full spec in ADR 0002, 0005):
 
-- Steps run **sequentially, fail-fast**, each in a fresh container from
+- Steps run **fail-fast**, each in a fresh container from
   `image` (pinned tags required, `latest` rejected), workspace bind-mounted
   at `/src` (a per-run snapshot of the repo — steps never race git-sync).
 - `run` executes with `sh -c "set -eu"`; logs stream to
@@ -96,6 +96,53 @@ Rules (full spec in ADR 0002):
   event.
 - The executor talks the Docker Engine API (`DOCKER_HOST` — the DinD sidecar
   on k3s, the mounted socket under compose). No engine, no SDK, no docker CLI.
+
+### Modular steps, DAG order, concurrency, timeouts (ADR 0005)
+
+```yaml
+# .petal/steps/yamllint.yaml — a reusable step in the same repo
+inputs:
+  config: { default: .yamllint }
+image: python:3.12-slim
+run: yamllint -c "$INPUT_CONFIG" .
+timeout: 10m
+```
+
+```yaml
+# .petal/pipelines/validate.yaml
+max_parallel: 2          # default 2, cap 4
+timeout: 30m             # whole run (default 60m)
+steps:
+  - name: deploy         # listed first — only `needs` decides order
+    image: alpine:3.21
+    run: ./deploy.sh
+    needs: [lint, test]
+  - name: lint
+    uses: yamllint       # resolved from .petal/steps/yamllint.yaml
+    with: { config: .yamllint }
+    needs: []            # a root
+  - name: test
+    image: golang:1.26-alpine
+    run: go test ./...
+    timeout: 15m         # per step (default 30m)
+    needs: []
+```
+
+- **Order:** no step declares `needs` → file order, one at a time (the
+  original behaviour). Any step declares `needs` → every step must
+  (`needs: []` for roots); the DAG alone decides order, so steps can be
+  reordered freely. Unknown/self/duplicate needs and cycles are rejected.
+- **Concurrency:** ready steps run in parallel up to `max_parallel`. They share
+  `/src` and the daemon's network — don't write the same paths or bind the same
+  ports. The first failure cancels running siblings; never-started steps are
+  recorded as `step.skipped`.
+- **`uses`:** library steps live in `.petal/steps/<name>.yaml` (no nesting).
+  `with` keys must be declared `inputs` (`default`, `required`); they arrive as
+  `INPUT_*` env. The pipeline step's `name` keys its logs, so one library step
+  can be used several times; its `env`/`timeout` override the library's.
+- **Timeouts:** step (default 30m) and run (default 60m) budgets; errors name
+  the limit (`step "lint" timed out after 10m`). Checkout has its own 5m.
+- **Cancel:** `POST /api/runs/{id}/cancel` — see the API table.
 
 The `stub` executor (`-executor stub`, the default) simulates runs without
 Docker — handy for UI development; `{"simulate":"failure"}` exercises failure
@@ -166,6 +213,7 @@ The container is a distroless static image (~20MB) — no OS packages, no shell.
 | POST | `/api/runs` | 🔒 Trigger a run: `{"pipeline":"docker-image","args":{}}` — optional `trigger_kind` (`api`\|`backstage`), `trigger_source`, `dedup_key`, and `repo` (allowlist alias) + `ref` (branch/tag/SHA, default the repo's `default_ref`) for a multi-repo run (ADR 0004). Self-repo unknown pipeline → 404; unknown repo / bad ref → 400 |
 | GET | `/api/repos` | Multi-repo allowlist (`-repos` file): alias, URL, default ref |
 | GET | `/api/runs/{id}` | Run detail + audit events (step.started / step.finished / output) |
+| POST | `/api/runs/{id}/cancel` | 🔒 Cancel a run: queued → `canceled` at once (200); running → step containers killed, unstarted steps skipped, run ends `canceled` (202); finished → 409 |
 | GET | `/api/runs/{id}/logs/{step}` | Step log (text/plain, live while the step runs) |
 | POST | `/api/triggers/github` | Signed webhook (HMAC-SHA256, header `X-Petal-Signature`) for CI triggers; enables with `PETAL_TRIGGER_TOKEN` env; dedups on `git_sha:pipeline` |
 | GET | `/api/schedules` | List cron schedules (`decl-*` ones come from the config file and are re-synced at startup) |
@@ -217,4 +265,5 @@ docs/adr/                     # architecture decision records
 - [x] **C — senses (metrics)**: `/metrics` from the registry + Homelab scrape + alerts (OTel traces still open)
 - [x] **Declarative schedules**: `schedules:` in the config file, synced at startup (git owns them)
 - [ ] **D — catalog**: ArgoCD/K8s views, scorecards, notifications
-- [ ] **v2 executor ideas**: `uses:` step library (`.petal/steps/*.yaml`), petal CLI scaffolding
+- [x] **Modular + DAG steps** (ADR 0005): `uses:` step library, `needs` DAG with bounded concurrency, step/run timeouts, cancel API
+- [ ] petal CLI scaffolding

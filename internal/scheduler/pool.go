@@ -14,6 +14,11 @@ import (
 	"github.com/Blacklotus89898/Petal/internal/runs"
 )
 
+// safetyCeiling bounds any run, whatever its pipeline declares, so a bug can
+// never hold a worker forever. The pipeline's own timeout (default 60m) is
+// enforced inside the executor, once the spec is known (ADR 0005).
+const safetyCeiling = 2 * time.Hour
+
 // Pool is a fixed-size worker pool over the run queue.
 type Pool struct {
 	store   *runs.Store
@@ -21,6 +26,21 @@ type Pool struct {
 	workers int
 	poll    time.Duration
 	log     *slog.Logger
+
+	mu      sync.Mutex
+	cancels map[string]context.CancelCauseFunc // running runs, by ID
+}
+
+// Cancel asks a running run to stop (cause: executor.ErrCancelRequested).
+// Reports false if the run isn't executing in this process.
+func (p *Pool) Cancel(runID string) bool {
+	p.mu.Lock()
+	cancel, ok := p.cancels[runID]
+	p.mu.Unlock()
+	if ok {
+		cancel(executor.ErrCancelRequested)
+	}
+	return ok
 }
 
 // NewPool creates a pool with n workers using the given executor.
@@ -28,7 +48,8 @@ func NewPool(store *runs.Store, exec executor.Executor, n int, log *slog.Logger)
 	if n < 1 {
 		n = 1
 	}
-	return &Pool{store: store, exec: exec, workers: n, poll: 2 * time.Second, log: log}
+	return &Pool{store: store, exec: exec, workers: n, poll: 2 * time.Second, log: log,
+		cancels: map[string]context.CancelCauseFunc{}}
 }
 
 // Start blocks until ctx is canceled, running workers until the queue drains.
@@ -68,7 +89,8 @@ func (p *Pool) worker(ctx context.Context, id int) {
 		}
 		p.log.Info("run started", "run", run.ID, "pipeline", run.Pipeline, "worker", id, "executor", p.exec.Name())
 		res := p.execute(ctx, *run)
-		if err := p.store.Finish(ctx, run.ID, res.Status, res.Error); err != nil {
+		// WithoutCancel: a shutdown (ctx canceled) must still record the result.
+		if err := p.store.Finish(context.WithoutCancel(ctx), run.ID, res.Status, res.Error); err != nil {
 			p.log.Error("finish run", "run", run.ID, "err", err)
 		}
 		if res.Output != "" {
@@ -88,8 +110,20 @@ func (p *Pool) execute(ctx context.Context, run runs.Run) (res executor.Result) 
 			p.log.Error("executor panic", "run", run.ID, "panic", r)
 		}
 	}()
-	runCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
-	defer cancel()
+	runCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	runCtx, stop := context.WithTimeoutCause(runCtx, safetyCeiling,
+		&executor.TimeoutError{What: "run (safety ceiling)", Limit: safetyCeiling})
+	defer stop()
+
+	p.mu.Lock()
+	p.cancels[run.ID] = cancel
+	p.mu.Unlock()
+	defer func() {
+		p.mu.Lock()
+		delete(p.cancels, run.ID)
+		p.mu.Unlock()
+	}()
 	return p.exec.Execute(runCtx, run)
 }
 

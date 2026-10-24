@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
@@ -53,6 +54,7 @@ type Steps struct {
 	repos      repos.Allowlist // multi-repo sources a run may name (ADR 0004)
 	catalogMu  sync.Mutex
 	catalog    map[string]catalogEntry // RepoPipelines cache, per alias
+	runner     stepRunner              // runStep; swapped for a fake in tests (ADR 0005)
 	log        *slog.Logger
 	cli        *client.Client
 	initErr    error
@@ -69,7 +71,7 @@ func NewSteps(store *runs.Store, workdir, dataDir, dockerHost string, allow repo
 		client.WithHost(dockerHost),
 		client.WithAPIVersionNegotiation(),
 	)
-	return &Steps{
+	s := &Steps{
 		store:      store,
 		workdir:    workdir,
 		dataDir:    dataDir,
@@ -79,13 +81,21 @@ func NewSteps(store *runs.Store, workdir, dataDir, dockerHost string, allow repo
 		cli:        cli,
 		initErr:    err,
 	}
+	s.runner = s.runStep
+	return s
 }
+
+// checkoutTimeout bounds the clone: it runs before the pipeline (and its own
+// timeout) is known (ADR 0005).
+const checkoutTimeout = 5 * time.Minute
 
 // Name implements Executor.
 func (s *Steps) Name() string { return "steps" }
 
-// Execute implements Executor: load spec → resolve params → copy workspace →
-// run steps sequentially (fail-fast) → collect outputs.
+// Execute implements Executor: source (snapshot or checkout) → load spec →
+// resolve params → run steps (file order, or the needs DAG with bounded
+// concurrency; fail-fast) under the pipeline's timeout → collect outputs.
+// ctx carries the pool's cancel cause (ErrCancelRequested) and safety ceiling.
 func (s *Steps) Execute(ctx context.Context, run runs.Run) Result {
 	if s.initErr != nil {
 		return Result{Status: runs.StatusFailed, Error: "docker client: " + s.initErr.Error()}
@@ -108,6 +118,9 @@ func (s *Steps) Execute(ctx context.Context, run runs.Run) Result {
 			return Result{Status: runs.StatusFailed, Error: "snapshot workspace: " + err.Error()}
 		}
 	} else if res := s.checkout(ctx, run, workDir, logDir); res != nil {
+		if out, ok := runOutcome(ctx); ok {
+			return out // canceled / ceiling while cloning
+		}
 		return *res
 	}
 
@@ -138,24 +151,20 @@ func (s *Steps) Execute(ctx context.Context, run runs.Run) Result {
 		baseEnv[pipeline.EnvKey(k)] = v
 	}
 
-	outputs := map[string]string{}
-	for i, step := range spec.Steps {
-		s.emit(ctx, run.ID, "step.started", map[string]any{"step": step.Name, "index": i, "image": step.Image})
-		exit, err := s.runStep(ctx, run.ID, step, workDir, logDir, baseEnv)
-		if ctx.Err() != nil {
-			s.emit(ctx, run.ID, "step.finished", map[string]any{"step": step.Name, "canceled": true})
-			return Result{Status: runs.StatusFailed, Error: "canceled"}
-		}
-		if err != nil || exit != 0 {
-			msg := fmt.Sprintf("step %q failed (exit %d)", step.Name, exit)
-			if err != nil {
-				msg += ": " + err.Error()
-			}
-			s.emit(ctx, run.ID, "step.finished", map[string]any{"step": step.Name, "exit": exit, "error": msg})
-			return Result{Status: runs.StatusFailed, Error: msg}
-		}
-		s.emit(ctx, run.ID, "step.finished", map[string]any{"step": step.Name, "exit": exit})
+	// The run's own budget starts here, once the spec (and its timeout) is
+	// known — the pool only holds a safety ceiling.
+	runCtx, cancelRun := context.WithTimeoutCause(ctx, spec.TimeoutDur,
+		&TimeoutError{What: "run", Limit: spec.TimeoutDur})
+	defer cancelRun()
+	failure := s.runSteps(runCtx, run.ID, spec, workDir, logDir, baseEnv)
+	if out, ok := runOutcome(runCtx); ok {
+		return out
 	}
+	if failure != "" {
+		return Result{Status: runs.StatusFailed, Error: failure}
+	}
+
+	outputs := map[string]string{}
 
 	for name, rel := range spec.Outputs {
 		raw, err := os.ReadFile(filepath.Join(workDir, filepath.FromSlash(rel)))
@@ -195,11 +204,14 @@ func (s *Steps) checkout(ctx context.Context, run runs.Run, workDir, logDir stri
 		Run:   checkoutScript,
 		Env:   map[string]string{"PETAL_REPO_URL": repo.URL, "PETAL_REF": ref},
 	}
+	ckCtx, cancel := context.WithTimeoutCause(ctx, checkoutTimeout, &TimeoutError{What: "checkout", Limit: checkoutTimeout})
+	defer cancel()
 	s.emit(ctx, run.ID, "step.started", map[string]any{"step": step.Name, "index": -1, "image": step.Image})
-	exit, err := s.runStep(ctx, run.ID, step, workDir, logDir, map[string]string{"PETAL_RUN_ID": run.ID})
-	if ctx.Err() != nil {
-		s.emit(ctx, run.ID, "step.finished", map[string]any{"step": step.Name, "canceled": true})
-		return fail("canceled")
+	exit, err := s.runner(ckCtx, run.ID, step, workDir, logDir, map[string]string{"PETAL_RUN_ID": run.ID})
+	if ckCtx.Err() != nil {
+		cause := context.Cause(ckCtx)
+		s.emit(ctx, run.ID, "step.finished", map[string]any{"step": step.Name, "canceled": true, "cause": cause.Error()})
+		return fail(cause.Error())
 	}
 	if err != nil || exit != 0 {
 		msg := fmt.Sprintf("checkout %s@%s failed (exit %d)", run.Repo, ref, exit)
@@ -216,7 +228,7 @@ func (s *Steps) checkout(ctx context.Context, run runs.Run, workDir, logDir stri
 		return fail("checkout: read resolved sha: " + err.Error())
 	}
 	sha := strings.TrimSpace(string(raw))
-	if err := s.store.SetGitSHA(ctx, run.ID, sha); err != nil {
+	if err := s.store.SetGitSHA(context.WithoutCancel(ctx), run.ID, sha); err != nil {
 		s.log.Warn("record git sha", "run", run.ID, "err", err)
 	}
 	s.emit(ctx, run.ID, "source.resolved", map[string]any{"repo": run.Repo, "ref": ref, "sha": sha})
@@ -275,6 +287,7 @@ func (s *Steps) runStep(ctx context.Context, runID string, step pipeline.Step, w
 	for k, v := range step.Env {
 		env = append(env, k+"="+v)
 	}
+	env = append(env, "PETAL_STEP="+step.Name) // documented in the README; useful with concurrent steps
 
 	ctr, err := s.cli.ContainerCreate(ctx, &container.Config{
 		Image:      step.Image,
@@ -336,7 +349,10 @@ func (s *Steps) runStep(ctx context.Context, runID string, step pipeline.Step, w
 
 func (s *Steps) emit(ctx context.Context, runID, kind string, payload map[string]any) {
 	raw, _ := json.Marshal(payload)
-	if err := s.store.AppendEvent(ctx, runID, kind, string(raw)); err != nil {
+	// WithoutCancel: the events that matter most (step.finished canceled,
+	// step.skipped) are written after the run's context is canceled — on that
+	// context the write itself would fail and the audit trail would lose them.
+	if err := s.store.AppendEvent(context.WithoutCancel(ctx), runID, kind, string(raw)); err != nil {
 		s.log.Error("append event", "run", runID, "kind", kind, "err", err)
 	}
 	s.log.Info(kind, "run", runID, "payload", string(raw))

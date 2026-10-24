@@ -17,13 +17,14 @@ import (
 
 // Server handles /api/* requests.
 type Server struct {
-	store        *runs.Store
-	triggerToken string
-	apiToken     string
-	workdir      string // pipeline catalog source (steps executor)
-	dataDir      string // step log files live under <dataDir>/logs
-	repos        repos.Allowlist
-	repoPipes    RepoPipelinesFunc
+	store         *runs.Store
+	triggerToken  string
+	apiToken      string
+	workdir       string // pipeline catalog source (steps executor)
+	dataDir       string // step log files live under <dataDir>/logs
+	repos         repos.Allowlist
+	repoPipes     RepoPipelinesFunc
+	cancelRunning func(runID string) bool
 }
 
 // RepoPipelinesFunc lists the pipelines in an allowlisted repo (the steps
@@ -49,15 +50,19 @@ type Options struct {
 	Repos repos.Allowlist
 	// RepoPipelines backs GET /api/pipelines?repo=<alias>.
 	RepoPipelines RepoPipelinesFunc
+	// CancelRunning stops a running run (the worker pool); false = not running
+	// here. Backs POST /api/runs/{id}/cancel together with the queued path.
+	CancelRunning func(runID string) bool
 }
 
 // Register wires the API routes onto mux.
 func Register(mux *http.ServeMux, store *runs.Store, opts Options) {
-	s := &Server{store: store, triggerToken: opts.TriggerToken, apiToken: opts.APIToken, workdir: opts.Workdir, dataDir: opts.DataDir, repos: opts.Repos, repoPipes: opts.RepoPipelines}
+	s := &Server{store: store, triggerToken: opts.TriggerToken, apiToken: opts.APIToken, workdir: opts.Workdir, dataDir: opts.DataDir, repos: opts.Repos, repoPipes: opts.RepoPipelines, cancelRunning: opts.CancelRunning}
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.HandleFunc("GET /api/runs", s.listRuns)
 	mux.HandleFunc("POST /api/runs", s.requireToken(s.createRun))
 	mux.HandleFunc("GET /api/runs/{id}", s.getRun)
+	mux.HandleFunc("POST /api/runs/{id}/cancel", s.requireToken(s.cancelRun))
 	mux.HandleFunc("GET /api/repos", s.listRepos)
 	mux.HandleFunc("GET /metrics", s.metrics) // Prometheus exposition (VMServiceScrape in Homelab)
 	if s.workdir != "" {

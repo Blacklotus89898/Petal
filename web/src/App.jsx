@@ -17,7 +17,7 @@ import {
 } from '@mantine/core'
 import { useDisclosure, useInterval } from '@mantine/hooks'
 
-const STATUS_COLOR = { queued: 'gray', running: 'blue', succeeded: 'green', failed: 'red' }
+const STATUS_COLOR = { queued: 'gray', running: 'blue', succeeded: 'green', failed: 'red', canceled: 'orange' }
 
 const fmtTime = ts => (ts ? new Date(ts).toLocaleTimeString() : '—')
 
@@ -33,12 +33,17 @@ function eventLabel(ev) {
     case 'queued': return `queued (${p.trigger || 'manual'})`
     case 'step.started': return `step "${p.step}" started (${p.image})`
     case 'step.finished':
-      return p.canceled ? `step "${p.step}" canceled`
+      return p.canceled ? `step "${p.step}" canceled${p.cause ? ` (${p.cause})` : ''}`
         : p.error ? `step "${p.step}" failed: ${p.error}`
         : `step "${p.step}" finished (exit ${p.exit})`
     case 'output': return `output: ${p.output}`
     case 'succeeded': return 'run succeeded'
     case 'failed': return 'run failed'
+    // ADR 0005: DAG/fail-fast + cancellation, ADR 0004: checkout
+    case 'step.skipped': return `step "${p.step}" skipped (a dependency didn't succeed)`
+    case 'canceled': return p.while === 'queued' ? 'canceled before it started' : 'run canceled'
+    case 'interrupted': return 'interrupted (control plane restarted)'
+    case 'source.resolved': return `checked out ${p.repo}@${p.ref} → ${(p.sha || '').slice(0, 7)}`
     default: return ev.kind
   }
 }
