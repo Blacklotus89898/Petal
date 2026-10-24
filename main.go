@@ -57,6 +57,12 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
+	if n, err := store.FailOrphaned(ctx); err != nil {
+		logger.Error("close orphaned runs", "err", err)
+		os.Exit(1)
+	} else if n > 0 {
+		logger.Warn("closed runs orphaned by the previous process", "count", n)
+	}
 
 	cfg, err := repos.LoadConfig(*reposPath)
 	if err != nil {

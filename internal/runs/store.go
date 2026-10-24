@@ -358,3 +358,31 @@ func newID() (string, error) {
 }
 
 func nowRFC() string { return time.Now().UTC().Format(time.RFC3339Nano) }
+
+// FailOrphaned marks runs left in "running" by a previous process as failed.
+// Petal is a single replica (one SQLite writer), so at startup nothing can
+// legitimately be running yet: those runs died with the old pod (e.g. every
+// Recreate deploy). Returns how many were closed.
+func (s *Store) FailOrphaned(ctx context.Context) (int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM runs WHERE status = 'running'`)
+	if err != nil {
+		return 0, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	for _, id := range ids {
+		if err := s.Finish(ctx, id, StatusFailed, "interrupted: the control plane restarted while this run was executing"); err != nil {
+			return 0, err
+		}
+		s.appendEvent(ctx, id, "interrupted", `{"reason":"control plane restart"}`)
+	}
+	return int64(len(ids)), nil
+}

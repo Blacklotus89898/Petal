@@ -75,3 +75,25 @@ func TestOpenMigratesPreRepoSchema(t *testing.T) {
 		s.Close()
 	}
 }
+
+func TestFailOrphaned(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	run, _ := s.Enqueue(ctx, "docker-image", "", "{}", "api", "", "")
+	if _, err := s.ClaimNext(ctx); err != nil { // now "running", as if mid-execution
+		t.Fatal(err)
+	}
+	queued, _ := s.Enqueue(ctx, "docker-image", "", "{}", "api", "", "")
+
+	n, err := s.FailOrphaned(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("FailOrphaned = (%d, %v), want (1, nil)", n, err)
+	}
+	got, _ := s.Get(ctx, run.ID)
+	if got.Status != StatusFailed || got.FinishedAt == nil || got.Error == "" {
+		t.Errorf("orphaned run = %+v", got)
+	}
+	if q, _ := s.Get(ctx, queued.ID); q.Status != StatusQueued {
+		t.Errorf("queued runs must be left alone (they'll be claimed), got %q", q.Status)
+	}
+}
