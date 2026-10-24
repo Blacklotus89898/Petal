@@ -1,6 +1,6 @@
 # ADR 0004: Multi-repo runs — `repo@ref` per run, allowlisted, cloned in a throwaway container
 
-**Status:** Proposed (2026-10-24) — for review before implementation
+**Status:** Accepted (2026-10-24, user go-ahead); implemented same day
 **Builds on:** [ADR 0002](0002-step-runner.md) (step-runner), [ADR 0003](0003-backstage-portal-petal-orchestrator.md) (Petal is the orchestrator)
 
 ## Context

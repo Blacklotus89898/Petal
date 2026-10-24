@@ -31,6 +31,8 @@ type Run struct {
 	TriggerSource string  `json:"trigger_source"`
 	DedupKey      *string `json:"dedup_key,omitempty"`
 	Status        string  `json:"status"`
+	Repo          string  `json:"repo,omitempty"` // allowlist alias; "" = the git-synced self repo (ADR 0004)
+	Ref           string  `json:"ref,omitempty"`  // branch, tag or SHA requested for Repo
 	GitSHA        string  `json:"git_sha,omitempty"`
 	TraceID       string  `json:"trace_id,omitempty"`
 	Error         string  `json:"error,omitempty"`
@@ -99,21 +101,63 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := migrate(ctx, db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &Store{db: db}, nil
+}
+
+// addedColumns are columns introduced after the first schema. CREATE TABLE IF
+// NOT EXISTS never alters an existing table, so each is added once, idempotently.
+var addedColumns = []struct{ table, column, ddl string }{
+	{"runs", "repo", `ALTER TABLE runs ADD COLUMN repo TEXT NOT NULL DEFAULT ''`}, // ADR 0004
+	{"runs", "ref", `ALTER TABLE runs ADD COLUMN ref TEXT NOT NULL DEFAULT ''`},   // ADR 0004
+}
+
+func migrate(ctx context.Context, db *sql.DB) error {
+	for _, c := range addedColumns {
+		var n int
+		err := db.QueryRowContext(ctx,
+			`SELECT count(*) FROM pragma_table_info(?) WHERE name = ?`, c.table, c.column).Scan(&n)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			if _, err := db.ExecContext(ctx, c.ddl); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // Close closes the underlying database.
 func (s *Store) Close() error { return s.db.Close() }
 
-// Enqueue records a new queued run. If dedupKey is non-empty and a run with
-// the same key already exists, that run is returned instead (at-least-once
-// triggers, deduplicated).
+// Enqueue records a new queued run from the self repo. If dedupKey is
+// non-empty and a run with the same key already exists, that run is returned
+// instead (at-least-once triggers, deduplicated).
 func (s *Store) Enqueue(ctx context.Context, pipeline, moduleFn, argsJSON, triggerKind, triggerSource, dedupKey string) (*Run, error) {
-	if argsJSON == "" {
-		argsJSON = "{}"
+	return s.Add(ctx, NewRun{Pipeline: pipeline, ModuleFn: moduleFn, ArgsJSON: argsJSON,
+		TriggerKind: triggerKind, TriggerSource: triggerSource, DedupKey: dedupKey})
+}
+
+// NewRun describes a run to enqueue. Repo/Ref are empty for the self repo.
+type NewRun struct {
+	Pipeline, ModuleFn, ArgsJSON string
+	TriggerKind, TriggerSource   string
+	DedupKey                     string
+	Repo, Ref                    string
+}
+
+// Add records a new queued run (Enqueue's general form, ADR 0004).
+func (s *Store) Add(ctx context.Context, n NewRun) (*Run, error) {
+	if n.ArgsJSON == "" {
+		n.ArgsJSON = "{}"
 	}
-	if dedupKey != "" {
-		if existing, err := s.byDedupKey(ctx, dedupKey); err != nil || existing != nil {
+	if n.DedupKey != "" {
+		if existing, err := s.byDedupKey(ctx, n.DedupKey); err != nil || existing != nil {
 			return existing, err
 		}
 	}
@@ -122,18 +166,18 @@ func (s *Store) Enqueue(ctx context.Context, pipeline, moduleFn, argsJSON, trigg
 		return nil, err
 	}
 	var dedup any
-	if dedupKey != "" {
-		dedup = dedupKey
+	if n.DedupKey != "" {
+		dedup = n.DedupKey
 	}
 	now := nowRFC()
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO runs (id, pipeline, module_fn, args_json, trigger_kind, trigger_source, dedup_key, status, queued_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?)`,
-		id, pipeline, moduleFn, argsJSON, triggerKind, triggerSource, dedup, now)
+		INSERT INTO runs (id, pipeline, module_fn, args_json, trigger_kind, trigger_source, dedup_key, repo, ref, status, queued_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`,
+		id, n.Pipeline, n.ModuleFn, n.ArgsJSON, n.TriggerKind, n.TriggerSource, dedup, n.Repo, n.Ref, now)
 	if err != nil {
 		return nil, err
 	}
-	s.appendEvent(ctx, id, "queued", `{"trigger":"`+triggerKind+`"}`)
+	s.appendEvent(ctx, id, "queued", `{"trigger":"`+n.TriggerKind+`"}`)
 	return s.Get(ctx, id)
 }
 
@@ -202,6 +246,7 @@ type Filter struct {
 	Pipeline     string // exact match
 	TriggerKind  string // exact match
 	SourcePrefix string // prefix match on trigger_source (e.g. "backstage:component:default/petal")
+	Repo         string // exact match on the repo alias ("" matches every repo)
 }
 
 // ListFiltered returns the most recent runs matching f — how a portal shows
@@ -219,6 +264,10 @@ func (s *Store) ListFiltered(ctx context.Context, f Filter) ([]Run, error) {
 	if f.TriggerKind != "" {
 		q += ` AND trigger_kind = ?`
 		args = append(args, f.TriggerKind)
+	}
+	if f.Repo != "" {
+		q += ` AND repo = ?`
+		args = append(args, f.Repo)
 	}
 	if f.SourcePrefix != "" {
 		q += ` AND substr(trigger_source, 1, ?) = ?`
@@ -283,14 +332,14 @@ func (s *Store) byDedupKey(ctx context.Context, key string) (*Run, error) {
 	return run, err
 }
 
-const runColumns = `id, pipeline, module_fn, args_json, trigger_kind, trigger_source, dedup_key, status, git_sha, trace_id, error, queued_at, started_at, finished_at`
+const runColumns = `id, pipeline, module_fn, args_json, trigger_kind, trigger_source, dedup_key, repo, ref, status, git_sha, trace_id, error, queued_at, started_at, finished_at`
 
 type rowScanner interface{ Scan(dest ...any) error }
 
 func scanRun(r rowScanner) (*Run, error) {
 	var run Run
 	err := r.Scan(&run.ID, &run.Pipeline, &run.ModuleFn, &run.ArgsJSON, &run.TriggerKind, &run.TriggerSource,
-		&run.DedupKey, &run.Status, &run.GitSHA, &run.TraceID, &run.Error,
+		&run.DedupKey, &run.Repo, &run.Ref, &run.Status, &run.GitSHA, &run.TraceID, &run.Error,
 		&run.QueuedAt, &run.StartedAt, &run.FinishedAt)
 	if err != nil {
 		return nil, err

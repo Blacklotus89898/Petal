@@ -184,7 +184,15 @@ export default function App() {
                 {runs.map(run => (
                   <Table.Tr key={run.id} onClick={() => openRun(run.id)} style={{ cursor: 'pointer' }}>
                     <Table.Td style={{ fontFamily: 'monospace' }}>{run.id}</Table.Td>
-                    <Table.Td>{run.pipeline}{run.module_fn ? `:${run.module_fn}` : ''}</Table.Td>
+                    <Table.Td>
+                      {run.pipeline}{run.module_fn ? `:${run.module_fn}` : ''}
+                      {run.repo ? (
+                        // multi-repo run (ADR 0004): alias@commit once checked out, alias@ref before
+                        <Text size="xs" c="dimmed" ff="monospace">
+                          {run.repo}@{run.git_sha ? run.git_sha.slice(0, 7) : run.ref}
+                        </Text>
+                      ) : null}
+                    </Table.Td>
                     <Table.Td>
                       <Tooltip label={run.trigger_source || 'no source recorded'}>
                         <Badge variant="light" color="violet">{run.trigger_kind}</Badge>

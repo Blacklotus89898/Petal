@@ -76,7 +76,7 @@ func TestExecuteWithoutDocker(t *testing.T) {
 	dataDir := t.TempDir()
 
 	// tcp://127.0.0.1:1 refuses immediately — no long connect timeouts.
-	s := NewSteps(store, workdir, dataDir, "tcp://127.0.0.1:1", nil)
+	s := NewSteps(store, workdir, dataDir, "tcp://127.0.0.1:1", nil, nil)
 
 	run, err := store.Enqueue(ctx, "hello", "", `{}`, "manual", "test", "")
 	if err != nil {

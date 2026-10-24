@@ -24,6 +24,10 @@ var (
 // pipelinesDir is the repo-relative directory scanned for pipeline files.
 const pipelinesDir = ".petal/pipelines"
 
+// CheckoutStep is the reserved name of the synthetic first step that clones a
+// run's repo (ADR 0004); its log is served like any other step's.
+const CheckoutStep = "petal-checkout"
+
 // ValidName reports whether s is a valid pipeline/step/param identifier:
 // lowercase kebab-case (letters, digits, - _ .), ≤64 chars, no leading
 // separator. Exported because log-file serving uses it as its path-safety gate.
@@ -108,6 +112,9 @@ func (s *fileSpec) validate(defaultName string) (*Pipeline, error) {
 		}
 		if seen[st.Name] {
 			return nil, fmt.Errorf("%w: duplicate step name %q", ErrInvalid, st.Name)
+		}
+		if st.Name == CheckoutStep {
+			return nil, fmt.Errorf("%w: step name %q is reserved for Petal's source checkout", ErrInvalid, st.Name)
 		}
 		seen[st.Name] = true
 		if st.Image == "" || strings.ContainsAny(st.Image, " \t\n") || strings.EqualFold(filepath.Ext(st.Image), ".latest") || strings.HasSuffix(st.Image, ":latest") {

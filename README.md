@@ -162,8 +162,9 @@ The container is a distroless static image (~20MB) — no OS packages, no shell.
 |---|---|---|
 | GET | `/api/health` | Liveness probe |
 | GET | `/api/pipelines` | Pipeline catalog discovered in the workdir |
-| GET | `/api/runs?limit=50` | Recent runs; filters `pipeline=`, `trigger_kind=`, `source=` (trigger_source prefix, e.g. `backstage:component:default/petal%23`) |
-| POST | `/api/runs` | 🔒 Trigger a run: `{"pipeline":"docker-image","args":{}}` — optional `trigger_kind` (`api`\|`backstage`), `trigger_source`, `dedup_key`; unknown pipeline → 404 |
+| GET | `/api/runs?limit=50` | Recent runs; filters `pipeline=`, `trigger_kind=`, `repo=`, `source=` (trigger_source prefix, e.g. `backstage:component:default/petal%23`) |
+| POST | `/api/runs` | 🔒 Trigger a run: `{"pipeline":"docker-image","args":{}}` — optional `trigger_kind` (`api`\|`backstage`), `trigger_source`, `dedup_key`, and `repo` (allowlist alias) + `ref` (branch/tag/SHA, default the repo's `default_ref`) for a multi-repo run (ADR 0004). Self-repo unknown pipeline → 404; unknown repo / bad ref → 400 |
+| GET | `/api/repos` | Multi-repo allowlist (`-repos` file): alias, URL, default ref |
 | GET | `/api/runs/{id}` | Run detail + audit events (step.started / step.finished / output) |
 | GET | `/api/runs/{id}/logs/{step}` | Step log (text/plain, live while the step runs) |
 | POST | `/api/triggers/github` | Signed webhook (HMAC-SHA256, header `X-Petal-Signature`) for CI triggers; enables with `PETAL_TRIGGER_TOKEN` env; dedups on `git_sha:pipeline` |
@@ -211,7 +212,7 @@ docs/adr/                     # architecture decision records
 - [x] **B — brains**: ~~GHA webhook receiver~~ ✅ · ~~cron scheduler~~ ✅ · repo-native pipeline spec + step-runner executor (ADR 0002) ✅
 - [x] **Orchestrator contract** (ADR 0003): bearer-token API, trigger provenance, run filters, read-only console
 - [x] **Backstage integration**: `petal:run` scaffolder action, "Run a Petal pipeline" template with a live pipeline picker, "Petal runs" entity card (Homelab repo, 2026-10-23)
-- [ ] **Multi-repo runs**: `repo@ref` per run, cloned in a throwaway container, repo allowlist
+- [x] **Multi-repo runs** (ADR 0004): `repo@ref` per run, cloned in a throwaway `alpine/git` container, allowlist file (`-repos`), resolved commit recorded
 - [ ] **C — senses**: OTel wiring, health dashboard, metrics
 - [ ] **D — catalog**: ArgoCD/K8s views, scorecards, notifications
 - [ ] **v2 executor ideas**: `uses:` step library (`.petal/steps/*.yaml`), petal CLI scaffolding

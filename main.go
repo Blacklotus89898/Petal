@@ -19,6 +19,7 @@ import (
 
 	"github.com/Blacklotus89898/Petal/internal/api"
 	"github.com/Blacklotus89898/Petal/internal/executor"
+	"github.com/Blacklotus89898/Petal/internal/repos"
 	"github.com/Blacklotus89898/Petal/internal/runs"
 	"github.com/Blacklotus89898/Petal/internal/scheduler"
 )
@@ -33,6 +34,7 @@ func main() {
 	workers := flag.Int("workers", 2, "executor worker count")
 	execName := flag.String("executor", "stub", "executor: stub or steps")
 	workdir := flag.String("workdir", ".", "source workdir pipelines are loaded from (steps executor)")
+	reposPath := flag.String("repos", "", "multi-repo allowlist YAML (ADR 0004); missing file = self repo only")
 	flag.Parse()
 	if *dataDir == "" {
 		*dataDir = filepath.Dir(*dbPath)
@@ -54,9 +56,15 @@ func main() {
 	}
 	defer store.Close()
 
+	allow, err := repos.Load(*reposPath)
+	if err != nil {
+		logger.Error("load repo allowlist", "err", err)
+		os.Exit(1)
+	}
+
 	var exec executor.Executor = executor.Stub{}
 	if *execName == "steps" {
-		exec = executor.NewSteps(store, *workdir, *dataDir, os.Getenv("DOCKER_HOST"), logger)
+		exec = executor.NewSteps(store, *workdir, *dataDir, os.Getenv("DOCKER_HOST"), allow, logger)
 	}
 	logger.Info("executor selected", "executor", exec.Name())
 
@@ -70,6 +78,7 @@ func main() {
 		APIToken:     os.Getenv("PETAL_API_TOKEN"),
 		Workdir:      *workdir,
 		DataDir:      *dataDir,
+		Repos:        allow,
 	})
 	mux.Handle("/", spaHandler())
 
@@ -82,7 +91,7 @@ func main() {
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
 	logger.Info("petal listening", "addr", *addr, "db", *dbPath, "workers", *workers,
-		"api_writes", os.Getenv("PETAL_API_TOKEN") != "")
+		"api_writes", os.Getenv("PETAL_API_TOKEN") != "", "repos", len(allow))
 
 	select {
 	case <-ctx.Done():

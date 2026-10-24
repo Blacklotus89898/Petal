@@ -23,15 +23,33 @@ import (
 	"github.com/docker/docker/pkg/stdcopy"
 
 	"github.com/Blacklotus89898/Petal/internal/pipeline"
+	"github.com/Blacklotus89898/Petal/internal/repos"
 	"github.com/Blacklotus89898/Petal/internal/runs"
 )
 
+// checkoutImage is the throwaway clone container for multi-repo runs
+// (ADR 0004): Petal's own image is distroless and has no git. Pinned.
+const checkoutImage = "alpine/git:2.54.0"
+
+// checkoutScript clones PETAL_REPO_URL blob-less into the (empty) workspace and
+// checks out PETAL_REF detached — a remote branch first, then a tag or commit.
+// URL and ref arrive as env vars, never interpolated into the script; refs are
+// pre-validated by repos.ValidRef (no leading "-", no "..").
+const checkoutScript = `git clone --quiet --filter=blob:none --no-checkout "$PETAL_REPO_URL" /src
+cd /src
+sha=$(git rev-parse --verify --quiet "origin/$PETAL_REF^{commit}" || git rev-parse --verify --quiet "$PETAL_REF^{commit}") || {
+  echo "ref $PETAL_REF not found in $PETAL_REPO_URL" >&2; exit 1; }
+git -c advice.detachedHead=false checkout --quiet --detach "$sha"
+printf '%s' "$sha" > .git/petal-resolved-sha
+git log -1 --format='checked out %H - %s'`
+
 // Steps configures the step-runner.
 type Steps struct {
-	store      *runs.Store // per-step audit events (step.started / step.finished)
-	workdir    string      // source tree (git-synced) copied into each run workspace
-	dataDir    string      // PVC root: logs/ and work/ live under here
-	dockerHost string      // injected into step containers for image-building steps
+	store      *runs.Store     // per-step audit events (step.started / step.finished)
+	workdir    string          // source tree (git-synced) copied into each run workspace
+	dataDir    string          // PVC root: logs/ and work/ live under here
+	dockerHost string          // injected into step containers for image-building steps
+	repos      repos.Allowlist // multi-repo sources a run may name (ADR 0004)
 	log        *slog.Logger
 	cli        *client.Client
 	initErr    error
@@ -40,7 +58,7 @@ type Steps struct {
 // NewSteps creates the executor and its Docker API client. An unreachable
 // daemon is not fatal here — runs fail with a clear error instead (same
 // behavior the Dagger executor had for engine outages).
-func NewSteps(store *runs.Store, workdir, dataDir, dockerHost string, log *slog.Logger) *Steps {
+func NewSteps(store *runs.Store, workdir, dataDir, dockerHost string, allow repos.Allowlist, log *slog.Logger) *Steps {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -53,6 +71,7 @@ func NewSteps(store *runs.Store, workdir, dataDir, dockerHost string, log *slog.
 		workdir:    workdir,
 		dataDir:    dataDir,
 		dockerHost: dockerHost,
+		repos:      allow,
 		log:        log,
 		cli:        cli,
 		initErr:    err,
@@ -69,7 +88,27 @@ func (s *Steps) Execute(ctx context.Context, run runs.Run) Result {
 		return Result{Status: runs.StatusFailed, Error: "docker client: " + s.initErr.Error()}
 	}
 
-	spec, err := pipeline.Get(s.workdir, run.Pipeline)
+	logDir := filepath.Join(s.dataDir, "logs", run.ID)
+	workDir := filepath.Join(s.dataDir, "work", run.ID)
+	defer os.RemoveAll(workDir) // logs stay; workspace is scratch
+	for _, d := range []string{logDir, workDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			return Result{Status: runs.StatusFailed, Error: "create " + d + ": " + err.Error()}
+		}
+	}
+
+	// Source: the git-synced self repo (snapshot, so steps can write freely
+	// without racing git-sync), or an allowlisted repo cloned at the run's ref
+	// (ADR 0004). Either way the pipeline spec loads from the run's own tree.
+	if run.Repo == "" {
+		if err := os.CopyFS(workDir, os.DirFS(s.workdir)); err != nil {
+			return Result{Status: runs.StatusFailed, Error: "snapshot workspace: " + err.Error()}
+		}
+	} else if res := s.checkout(ctx, run, workDir, logDir); res != nil {
+		return *res
+	}
+
+	spec, err := pipeline.Get(workDir, run.Pipeline)
 	if err != nil {
 		return Result{Status: runs.StatusFailed, Error: err.Error()}
 	}
@@ -81,21 +120,6 @@ func (s *Steps) Execute(ctx context.Context, run runs.Run) Result {
 	params, err := spec.ResolveParams(args, run.ID)
 	if err != nil {
 		return Result{Status: runs.StatusFailed, Error: err.Error()}
-	}
-
-	logDir := filepath.Join(s.dataDir, "logs", run.ID)
-	workDir := filepath.Join(s.dataDir, "work", run.ID)
-	defer os.RemoveAll(workDir) // logs stay; workspace is scratch
-	for _, d := range []string{logDir, workDir} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			return Result{Status: runs.StatusFailed, Error: "create " + d + ": " + err.Error()}
-		}
-	}
-
-	// Snapshot the source tree into the per-run workspace so steps can write
-	// freely without racing git-sync, and reruns are reproducible per SHA.
-	if err := os.CopyFS(workDir, os.DirFS(s.workdir)); err != nil {
-		return Result{Status: runs.StatusFailed, Error: "snapshot workspace: " + err.Error()}
 	}
 
 	baseEnv := map[string]string{
@@ -143,6 +167,57 @@ func (s *Steps) Execute(ctx context.Context, run runs.Run) Result {
 		out.Output = string(payload)
 	}
 	return out
+}
+
+// checkout clones run.Repo at run.Ref into workDir as the synthetic first step
+// (pipeline.CheckoutStep), records the resolved commit on the run, and returns
+// a failed Result on any error (nil on success).
+func (s *Steps) checkout(ctx context.Context, run runs.Run, workDir, logDir string) *Result {
+	fail := func(msg string) *Result { return &Result{Status: runs.StatusFailed, Error: msg} }
+	repo, ok := s.repos[run.Repo]
+	if !ok {
+		return fail(fmt.Sprintf("repo %q is not in the allowlist", run.Repo))
+	}
+	ref := run.Ref
+	if ref == "" {
+		ref = repo.DefaultRef
+	}
+	if !repos.ValidRef(ref) {
+		return fail(fmt.Sprintf("invalid ref %q", ref))
+	}
+
+	step := pipeline.Step{
+		Name:  pipeline.CheckoutStep,
+		Image: checkoutImage,
+		Run:   checkoutScript,
+		Env:   map[string]string{"PETAL_REPO_URL": repo.URL, "PETAL_REF": ref},
+	}
+	s.emit(ctx, run.ID, "step.started", map[string]any{"step": step.Name, "index": -1, "image": step.Image})
+	exit, err := s.runStep(ctx, run.ID, step, workDir, logDir, map[string]string{"PETAL_RUN_ID": run.ID})
+	if ctx.Err() != nil {
+		s.emit(ctx, run.ID, "step.finished", map[string]any{"step": step.Name, "canceled": true})
+		return fail("canceled")
+	}
+	if err != nil || exit != 0 {
+		msg := fmt.Sprintf("checkout %s@%s failed (exit %d)", run.Repo, ref, exit)
+		if err != nil {
+			msg += ": " + err.Error()
+		}
+		s.emit(ctx, run.ID, "step.finished", map[string]any{"step": step.Name, "exit": exit, "error": msg})
+		return fail(msg)
+	}
+	s.emit(ctx, run.ID, "step.finished", map[string]any{"step": step.Name, "exit": 0})
+
+	raw, err := os.ReadFile(filepath.Join(workDir, ".git", "petal-resolved-sha"))
+	if err != nil {
+		return fail("checkout: read resolved sha: " + err.Error())
+	}
+	sha := strings.TrimSpace(string(raw))
+	if err := s.store.SetGitSHA(ctx, run.ID, sha); err != nil {
+		s.log.Warn("record git sha", "run", run.ID, "err", err)
+	}
+	s.emit(ctx, run.ID, "source.resolved", map[string]any{"repo": run.Repo, "ref": ref, "sha": sha})
+	return nil
 }
 
 // stepNetworkMode picks the network for a step container. When DOCKER_HOST is
