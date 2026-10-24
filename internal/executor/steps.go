@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
@@ -104,6 +105,7 @@ func (s *Steps) Execute(ctx context.Context, run runs.Run) Result {
 	logDir := filepath.Join(s.dataDir, "logs", run.ID)
 	workDir := filepath.Join(s.dataDir, "work", run.ID)
 	defer os.RemoveAll(workDir) // logs stay; workspace is scratch
+	defer s.sweep(context.WithoutCancel(ctx), run.ID)
 	for _, d := range []string{logDir, workDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return Result{Status: runs.StatusFailed, Error: "create " + d + ": " + err.Error()}
@@ -235,6 +237,29 @@ func (s *Steps) checkout(ctx context.Context, run runs.Run, workDir, logDir stri
 	return nil
 }
 
+// sweep force-removes every container labelled with this run — belt and
+// braces after cancellation races (ADR 0005): whatever happened mid-run, a
+// finished run leaves no containers behind on the DinD daemon.
+func (s *Steps) sweep(ctx context.Context, runID string) {
+	if s.cli == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	list, err := s.cli.ContainerList(ctx, container.ListOptions{
+		All:     true,
+		Filters: filters.NewArgs(filters.Arg("label", "petal.run="+runID)),
+	})
+	if err != nil {
+		return // daemon unreachable: nothing we can clean anyway
+	}
+	for _, c := range list {
+		if err := s.cli.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true}); err == nil {
+			s.log.Info("swept leftover step container", "run", runID, "container", c.Names)
+		}
+	}
+}
+
 // stepNetworkMode picks the network for a step container. When DOCKER_HOST is
 // a loopback address (the DinD sidecar pattern, tcp://127.0.0.1:2375), steps
 // that drive Docker themselves — docker:27-cli builds, for instance — reach
@@ -306,6 +331,10 @@ func (s *Steps) runStep(ctx context.Context, runID string, step pipeline.Step, w
 		AutoRemove: false,
 	}, nil, nil, name)
 	if err != nil {
+		// A cancel can land while the daemon is creating the container: the
+		// container exists but the client only sees ctx's error, so no remove
+		// was ever registered. Remove it by name (no-op if it doesn't exist).
+		_ = s.cli.ContainerRemove(context.WithoutCancel(ctx), name, container.RemoveOptions{Force: true})
 		return -1, fmt.Errorf("create: %w", err)
 	}
 	defer func() {
