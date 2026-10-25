@@ -109,3 +109,47 @@ schedules:
 		}
 	}
 }
+
+func TestSecretGrants(t *testing.T) {
+	c, err := LoadConfig(write(t, `
+self:
+  secrets: [ghcr-push]
+repos:
+  homelab:
+    url: https://github.com/Blacklotus89898/Homelab.git
+    secrets: [e2e-canary]
+  tulip:
+    url: https://github.com/Blacklotus89898/Tulip.git
+    default_ref: main
+    secrets: [a, b]
+    secret_refs: [main, release]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.SelfSecrets) != 1 || c.SelfSecrets[0] != "ghcr-push" {
+		t.Errorf("self secrets = %v", c.SelfSecrets)
+	}
+	h := c.Repos["homelab"]
+	if got := h.SecretsAt("main"); len(got) != 1 { // secret_refs defaults to [default_ref]
+		t.Errorf("homelab@main = %v", got)
+	}
+	if got := h.SecretsAt("feature"); got != nil {
+		t.Errorf("homelab@feature must get nothing, got %v", got)
+	}
+	if got := c.Repos["tulip"].SecretsAt("release"); len(got) != 2 {
+		t.Errorf("tulip@release = %v", got)
+	}
+
+	for name, body := range map[string]string{
+		"bad name":   "repos:\n  x:\n    url: https://e/x.git\n    secrets: [Bad_Name]\n",
+		"duplicate":  "repos:\n  x:\n    url: https://e/x.git\n    secrets: [a, a]\n",
+		"refs alone": "repos:\n  x:\n    url: https://e/x.git\n    secret_refs: [main]\n",
+		"bad ref":    "repos:\n  x:\n    url: https://e/x.git\n    secrets: [a]\n    secret_refs: [-x]\n",
+		"bad self":   "self:\n  secrets: [\"../etc\"]\n",
+	} {
+		if _, err := LoadConfig(write(t, body)); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+	}
+}

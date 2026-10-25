@@ -85,6 +85,9 @@ type Step struct {
 	// Needs: nil = not declared (file-order mode); empty = a DAG root.
 	Needs   []string `yaml:"needs" json:"needs,omitempty"`
 	Timeout string   `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	// Secrets the step requests (names only); granted per repo+ref in
+	// Petal's config and mounted as files (ADR 0006).
+	Secrets []string `yaml:"secrets,omitempty" json:"secrets,omitempty"`
 
 	TimeoutDur time.Duration `yaml:"-" json:"-"`
 }
@@ -129,6 +132,7 @@ type libStep struct {
 	Run         string            `yaml:"run"`
 	Env         map[string]string `yaml:"env"`
 	Timeout     string            `yaml:"timeout"`
+	Secrets     []string          `yaml:"secrets"`
 }
 
 func pinned(image string) bool {
@@ -228,6 +232,7 @@ func resolveUses(st *Step, lib *library) error {
 		env[InputEnvKey(name)] = v
 	}
 	st.Image, st.Run, st.Env = ls.Image, ls.Run, env
+	st.Secrets = mergeNames(ls.Secrets, st.Secrets)
 	if st.Timeout == "" {
 		st.Timeout = ls.Timeout
 	}
@@ -285,6 +290,9 @@ func (s *fileSpec) validate(defaultName string, lib *library) (*Pipeline, error)
 			return nil, fmt.Errorf("%w: step %q: %v", ErrInvalid, st.Name, err)
 		}
 		st.TimeoutDur = d
+		if err := checkSecretNames(st.Secrets); err != nil {
+			return nil, fmt.Errorf("%w: step %q: %v", ErrInvalid, st.Name, err)
+		}
 		if st.Needs != nil {
 			declared++
 		}
@@ -333,6 +341,38 @@ func (s *fileSpec) validate(defaultName string, lib *library) (*Pipeline, error)
 		}
 	}
 	return p, nil
+}
+
+// mergeNames returns a ∪ b, a's order first, without duplicates.
+func mergeNames(a, b []string) []string {
+	if len(a) == 0 {
+		return b
+	}
+	out := append([]string{}, a...)
+	for _, n := range b {
+		dup := false
+		for _, m := range out {
+			dup = dup || m == n
+		}
+		if !dup {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func checkSecretNames(names []string) error {
+	seen := map[string]bool{}
+	for _, n := range names {
+		if !validName(n) {
+			return fmt.Errorf("bad secret name %q", n)
+		}
+		if seen[n] {
+			return fmt.Errorf("secret %q requested twice", n)
+		}
+		seen[n] = true
+	}
+	return nil
 }
 
 // checkDAG rejects unknown, self and duplicate needs, and cycles (Kahn).
@@ -471,4 +511,13 @@ func EnvKey(param string) string {
 // InputEnvKey is the env var a library-step input is injected as (ADR 0005).
 func InputEnvKey(input string) string {
 	return "INPUT_" + strings.ToUpper(envKeyReplacer.Replace(input))
+}
+
+// SecretMountDir is where a step's requested secrets are mounted, one
+// read-only file per secret (ADR 0006).
+const SecretMountDir = "/run/petal/secrets"
+
+// SecretEnvKey is the env var holding the path of a mounted secret file.
+func SecretEnvKey(secret string) string {
+	return "PETAL_SECRET_" + strings.ToUpper(envKeyReplacer.Replace(secret)) + "_FILE"
 }

@@ -48,17 +48,19 @@ git log -1 --format='checked out %H - %s'`
 
 // Steps configures the step-runner.
 type Steps struct {
-	store      *runs.Store     // per-step audit events (step.started / step.finished)
-	workdir    string          // source tree (git-synced) copied into each run workspace
-	dataDir    string          // PVC root: logs/ and work/ live under here
-	dockerHost string          // injected into step containers for image-building steps
-	repos      repos.Allowlist // multi-repo sources a run may name (ADR 0004)
-	catalogMu  sync.Mutex
-	catalog    map[string]catalogEntry // RepoPipelines cache, per alias
-	runner     stepRunner              // runStep; swapped for a fake in tests (ADR 0005)
-	log        *slog.Logger
-	cli        *client.Client
-	initErr    error
+	store       *runs.Store     // per-step audit events (step.started / step.finished)
+	workdir     string          // source tree (git-synced) copied into each run workspace
+	dataDir     string          // PVC root: logs/ and work/ live under here
+	dockerHost  string          // injected into step containers for image-building steps
+	repos       repos.Allowlist // multi-repo sources a run may name (ADR 0004)
+	catalogMu   sync.Mutex
+	catalog     map[string]catalogEntry // RepoPipelines cache, per alias
+	runner      stepRunner              // runStep; swapped for a fake in tests (ADR 0005)
+	secretsDir  string                  // mounted Secret, same path in dind (ADR 0006)
+	selfSecrets []string                // granted to self-repo runs
+	log         *slog.Logger
+	cli         *client.Client
+	initErr     error
 }
 
 // NewSteps creates the executor and its Docker API client. An unreachable
@@ -139,6 +141,13 @@ func (s *Steps) Execute(ctx context.Context, run runs.Run) Result {
 	if err != nil {
 		return Result{Status: runs.StatusFailed, Error: err.Error()}
 	}
+	granted, scope := s.grantedSecrets(run.Repo, run.Ref)
+	secretVals, err := s.loadSecrets(spec, granted, scope)
+	if err != nil {
+		return Result{Status: runs.StatusFailed, Error: err.Error()}
+	}
+	mask := newMasker(secretVals)
+	ctx = withMasker(ctx, mask)
 
 	baseEnv := map[string]string{
 		"PETAL_RUN_ID":    run.ID,
@@ -163,7 +172,7 @@ func (s *Steps) Execute(ctx context.Context, run runs.Run) Result {
 		return out
 	}
 	if failure != "" {
-		return Result{Status: runs.StatusFailed, Error: failure}
+		return Result{Status: runs.StatusFailed, Error: mask.String(failure)}
 	}
 
 	outputs := map[string]string{}
@@ -173,7 +182,7 @@ func (s *Steps) Execute(ctx context.Context, run runs.Run) Result {
 		if err != nil {
 			return Result{Status: runs.StatusFailed, Error: fmt.Sprintf("output %q: read %s: %v", name, rel, err)}
 		}
-		outputs[name] = strings.TrimSpace(string(raw))
+		outputs[name] = mask.String(strings.TrimSpace(string(raw)))
 	}
 	out := Result{Status: runs.StatusSucceeded}
 	if len(outputs) > 0 {
@@ -313,6 +322,12 @@ func (s *Steps) runStep(ctx context.Context, runID string, step pipeline.Step, w
 		env = append(env, k+"="+v)
 	}
 	env = append(env, "PETAL_STEP="+step.Name) // documented in the README; useful with concurrent steps
+	mounts := []mount.Mount{{Type: mount.TypeBind, Source: workDir, Target: "/src"}}
+	for _, sec := range step.Secrets { // ADR 0006: files, never env; outside /src
+		target := pipeline.SecretMountDir + "/" + sec
+		mounts = append(mounts, mount.Mount{Type: mount.TypeBind, Source: filepath.Join(s.secretsDir, sec), Target: target, ReadOnly: true})
+		env = append(env, pipeline.SecretEnvKey(sec)+"="+target)
+	}
 
 	ctr, err := s.cli.ContainerCreate(ctx, &container.Config{
 		Image:      step.Image,
@@ -323,12 +338,8 @@ func (s *Steps) runStep(ctx context.Context, runID string, step pipeline.Step, w
 		Labels:     map[string]string{"petal.run": runID, "petal.step": step.Name},
 	}, &container.HostConfig{
 		NetworkMode: container.NetworkMode(stepNetworkMode(s.dockerHost)),
-		Mounts: []mount.Mount{{
-			Type:   mount.TypeBind,
-			Source: workDir,
-			Target: "/src",
-		}},
-		AutoRemove: false,
+		Mounts:      mounts,
+		AutoRemove:  false,
 	}, nil, nil, name)
 	if err != nil {
 		// A cancel can land while the daemon is creating the container: the
@@ -356,7 +367,10 @@ func (s *Steps) runStep(ctx context.Context, runID string, step pipeline.Step, w
 	}
 
 	// TTY is off, so streams arrive demultiplexed; stdcopy re-merges them.
-	n, _ := stdcopy.StdCopy(logFile, logFile, attach.Reader)
+	// Secrets of the run are masked on the way to disk (ADR 0006).
+	out := maskerFrom(ctx).writer(logFile)
+	n, _ := stdcopy.StdCopy(out, out, attach.Reader)
+	_ = out.Flush()
 	attach.CloseWrite()
 
 	statusCh, errCh := s.cli.ContainerWait(ctx, ctr.ID, container.WaitConditionNotRunning)

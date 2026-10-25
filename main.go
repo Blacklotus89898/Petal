@@ -37,6 +37,7 @@ func main() {
 	execName := flag.String("executor", "stub", "executor: stub or steps")
 	workdir := flag.String("workdir", ".", "source workdir pipelines are loaded from (steps executor)")
 	reposPath := flag.String("repos", "", "config YAML: multi-repo allowlist (ADR 0004) + declared schedules; missing file = self repo only")
+	secretsDir := flag.String("secrets", "", "directory of secret files (one per secret; the same path must exist in the dind container) — ADR 0006; empty = no secrets")
 	flag.Parse()
 	if *dataDir == "" {
 		*dataDir = filepath.Dir(*dbPath)
@@ -79,6 +80,7 @@ func main() {
 	var repoPipes api.RepoPipelinesFunc
 	if *execName == "steps" {
 		steps := executor.NewSteps(store, *workdir, *dataDir, os.Getenv("DOCKER_HOST"), allow, logger)
+		steps.ConfigureSecrets(*secretsDir, cfg.SelfSecrets)
 		exec, repoPipes = steps, steps.RepoPipelines
 	}
 	logger.Info("executor selected", "executor", exec.Name())

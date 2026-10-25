@@ -158,7 +158,11 @@ func (s *Steps) execStep(group context.Context, runID string, i int, st pipeline
 	stepCtx, cancel := context.WithTimeoutCause(group, limit, &TimeoutError{What: fmt.Sprintf("step %q", st.Name), Limit: limit})
 	defer cancel()
 
-	s.emit(group, runID, "step.started", map[string]any{"step": st.Name, "index": i, "image": st.Image})
+	started := map[string]any{"step": st.Name, "index": i, "image": st.Image}
+	if len(st.Secrets) > 0 {
+		started["secrets"] = st.Secrets // names only (ADR 0006)
+	}
+	s.emit(group, runID, "step.started", started)
 	exit, err := s.runner(stepCtx, runID, st, workDir, logDir, baseEnv)
 
 	if stepCtx.Err() != nil {

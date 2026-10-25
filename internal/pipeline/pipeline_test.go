@@ -169,3 +169,44 @@ func TestEnvKey(t *testing.T) {
 		}
 	}
 }
+
+func writeFile(t *testing.T, dir, rel, content string) {
+	t.Helper()
+	path := filepath.Join(dir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStepSecrets(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, ".petal/steps/push.yaml", "image: docker:27-cli\nrun: docker push x\nsecrets: [ghcr-push]\n")
+	writeFile(t, dir, ".petal/pipelines/p.yaml", `steps:
+  - name: a
+    uses: push
+    secrets: [ghcr-push, extra]
+  - name: b
+    image: alpine:3.21
+    run: true
+`)
+	p, err := Get(dir, "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.Steps[0].Secrets; len(got) != 2 || got[0] != "ghcr-push" || got[1] != "extra" {
+		t.Errorf("uses step secrets = %v (library ∪ step, no dups)", got)
+	}
+	if p.Steps[1].Secrets != nil {
+		t.Errorf("plain step secrets = %v", p.Steps[1].Secrets)
+	}
+	if SecretEnvKey("ghcr-push") != "PETAL_SECRET_GHCR_PUSH_FILE" {
+		t.Errorf("env key = %s", SecretEnvKey("ghcr-push"))
+	}
+	writeFile(t, dir, ".petal/pipelines/p.yaml", "steps:\n  - name: a\n    image: alpine:3.21\n    run: true\n    secrets: [\"../x\"]\n")
+	if _, err := Get(dir, "p"); err == nil {
+		t.Error("bad secret name must be rejected at load")
+	}
+}

@@ -20,6 +20,20 @@ type Repo struct {
 	Alias      string `json:"alias"`
 	URL        string `json:"url"`
 	DefaultRef string `json:"default_ref"`
+	// Secrets granted to runs of this repo, only at SecretRefs (ADR 0006).
+	Secrets    []string `json:"secrets,omitempty"`
+	SecretRefs []string `json:"secret_refs,omitempty"`
+}
+
+// SecretsAt returns the secrets a run of this repo at ref is granted: all of
+// Secrets when ref is one of SecretRefs, none otherwise (ADR 0006).
+func (r Repo) SecretsAt(ref string) []string {
+	for _, sr := range r.SecretRefs {
+		if sr == ref {
+			return r.Secrets
+		}
+	}
+	return nil
 }
 
 // Allowlist maps alias → repo. The zero value allows nothing (self repo only).
@@ -41,20 +55,42 @@ type Schedule struct {
 type Config struct {
 	Repos     Allowlist
 	Schedules []Schedule
+	// SelfSecrets are granted to runs of the git-synced self repo (ADR 0006).
+	SelfSecrets []string
 }
 
 type fileSpec struct {
+	Self struct {
+		Secrets []string `yaml:"secrets"`
+	} `yaml:"self"`
 	Repos map[string]struct {
-		URL        string `yaml:"url"`
-		DefaultRef string `yaml:"default_ref"`
+		URL        string   `yaml:"url"`
+		DefaultRef string   `yaml:"default_ref"`
+		Secrets    []string `yaml:"secrets"`
+		SecretRefs []string `yaml:"secret_refs"`
 	} `yaml:"repos"`
 	Schedules []Schedule `yaml:"schedules"`
 }
 
 var (
-	aliasRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
-	refRe   = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,200}$`)
+	aliasRe  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+	refRe    = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,200}$`)
+	secretRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`) // = a Secret key and a pipeline name
 )
+
+func checkSecretNames(names []string) error {
+	seen := map[string]bool{}
+	for _, n := range names {
+		if !secretRe.MatchString(n) {
+			return fmt.Errorf("invalid secret name %q (lowercase, digits, . _ -)", n)
+		}
+		if seen[n] {
+			return fmt.Errorf("secret %q listed twice", n)
+		}
+		seen[n] = true
+	}
+	return nil
+}
 
 // ValidRef reports whether ref is a safe branch, tag or commit SHA to hand to
 // git: a conservative charset, no "..", and no leading "-" (option injection).
@@ -109,7 +145,25 @@ func LoadConfig(path string) (Config, error) {
 		if !ValidRef(ref) {
 			return Config{}, fmt.Errorf("%s: repo %q: invalid default_ref %q", path, alias, ref)
 		}
-		out[alias] = Repo{Alias: alias, URL: r.URL, DefaultRef: ref}
+		if err := checkSecretNames(r.Secrets); err != nil {
+			return Config{}, fmt.Errorf("%s: repo %q: %w", path, alias, err)
+		}
+		secretRefs := r.SecretRefs
+		if len(secretRefs) == 0 && len(r.Secrets) > 0 {
+			secretRefs = []string{ref}
+		}
+		for _, sr := range secretRefs {
+			if !ValidRef(sr) {
+				return Config{}, fmt.Errorf("%s: repo %q: invalid secret_ref %q", path, alias, sr)
+			}
+		}
+		if len(r.Secrets) == 0 && len(r.SecretRefs) > 0 {
+			return Config{}, fmt.Errorf("%s: repo %q: secret_refs without secrets", path, alias)
+		}
+		out[alias] = Repo{Alias: alias, URL: r.URL, DefaultRef: ref, Secrets: r.Secrets, SecretRefs: secretRefs}
+	}
+	if err := checkSecretNames(spec.Self.Secrets); err != nil {
+		return Config{}, fmt.Errorf("%s: self: %w", path, err)
 	}
 	seen := map[string]bool{}
 	for i, sch := range spec.Schedules {
@@ -129,7 +183,7 @@ func LoadConfig(path string) (Config, error) {
 		}
 		seen[sch.ID] = true
 	}
-	return Config{Repos: out, Schedules: spec.Schedules}, nil
+	return Config{Repos: out, Schedules: spec.Schedules, SelfSecrets: spec.Self.Secrets}, nil
 }
 
 // List returns the repos sorted by alias (stable API output).
