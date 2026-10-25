@@ -24,10 +24,10 @@ repos:
   homelab:
     url: https://github.com/Blacklotus89898/Homelab.git
     secrets: [e2e-canary]
-    secret_refs: [main]    # default: [default_ref]
+    trusted_refs: [main]    # default: [default_ref]
 ```
 A run receives a repo's secrets **only when its ref is one of
-`secret_refs`** (the branch names the repo protects). The checkout prefers a
+`trusted_refs`** (the branch names the repo protects). The checkout prefers a
 branch over a tag or SHA of the same name, so `main` always means the branch.
 Any other ref — a feature branch, a tag, even main's own SHA — gets no secrets.
 
@@ -55,13 +55,37 @@ step logs (streaming, including a value split across writes), in the run's
 outputs and in its error. Multi-line secrets are masked line by line too.
 Masking is a seatbelt, not a boundary: base64'd or reversed values pass.
 
-## Trust model (unchanged, now stated)
-The allowlist is the trust boundary. Steps share a privileged DinD daemon:
-a step that drives Docker can start a container that mounts anything the
-daemon can see, including `/etc/petal-secrets`. Grants and masking stop
-**accidental** exposure and pipelines from **ungranted refs**; they do not
-contain a hostile pipeline on a granted ref — that is what branch protection
-on `secret_refs` is for.
+### 5. Daemon access is a grant too (amended 2026-10-25, same day)
+The first cut gated only secret *requests*. A live probe proved that
+insufficient: every step had `DOCKER_HOST` and host networking, and the
+daemon can see `/etc/petal-secrets`, so a pipeline on an **ungranted branch**
+ran `docker run -v /etc/petal-secrets:/s alpine cat /s/…` and read the value
+— unmasked, since that run had no secrets loaded. Ref grants on secrets alone
+were theatre. Now:
+- `docker: true` on a step (or library step) requests the daemon; it is
+  granted like secrets (`docker: true` on the repo / `self`, at
+  `trusted_refs` only — the key was `secret_refs` for a day, renamed because
+  it gates every privilege). Ungranted → the run fails before any step.
+- Only a granted docker step gets `DOCKER_HOST` and host networking (needed
+  for the loopback daemon). Every other step — and the checkout — runs on
+  the daemon's default bridge with no `DOCKER_HOST`; a `DOCKER_HOST` in a
+  step's own `env` is dropped.
+- dind listens on `127.0.0.1:2375` only, so a bridge container cannot reach
+  it through the gateway IP.
+
+## Trust model
+- **Any ref of an allowlisted repo** runs as unprivileged containers on a
+  bridge: no daemon, no secrets. That is what a branch push can do.
+- **A trusted ref granted docker** can reach everything the privileged DinD
+  daemon can: every secret file, other runs' workspaces under `/data`, and
+  the node beyond it. Grant docker only where you would grant everything,
+  and only to refs with branch protection that is actually enforced (the
+  Homelab and Petal repos' `main` currently accept admin-bypassed pushes).
+- **A trusted ref granted only secrets** gets just its requested files —
+  but its pipeline is still trusted code that could print them.
+- Masking stops accidental exposure, not a hostile pipeline.
+- Values are read once at run start and masked from then on; a re-seal that
+  lands mid-run is mounted into later steps but not masked for that run.
 
 ## Consequences
 - Real credentials (registry push tokens) are sealed by the operator into

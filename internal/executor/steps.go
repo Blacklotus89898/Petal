@@ -58,6 +58,7 @@ type Steps struct {
 	runner      stepRunner              // runStep; swapped for a fake in tests (ADR 0005)
 	secretsDir  string                  // mounted Secret, same path in dind (ADR 0006)
 	selfSecrets []string                // granted to self-repo runs
+	selfDocker  bool                    // self-repo steps may request docker
 	log         *slog.Logger
 	cli         *client.Client
 	initErr     error
@@ -141,8 +142,7 @@ func (s *Steps) Execute(ctx context.Context, run runs.Run) Result {
 	if err != nil {
 		return Result{Status: runs.StatusFailed, Error: err.Error()}
 	}
-	granted, scope := s.grantedSecrets(run.Repo, run.Ref)
-	secretVals, err := s.loadSecrets(spec, granted, scope)
+	secretVals, err := s.loadSecrets(spec, s.grantFor(run.Repo, run.Ref))
 	if err != nil {
 		return Result{Status: runs.StatusFailed, Error: err.Error()}
 	}
@@ -154,9 +154,6 @@ func (s *Steps) Execute(ctx context.Context, run runs.Run) Result {
 		"PETAL_PIPELINE":  spec.Name,
 		"PETAL_TRIGGER":   run.TriggerKind,
 		"PETAL_ARGS_JSON": run.ArgsJSON,
-	}
-	if s.dockerHost != "" {
-		baseEnv["DOCKER_HOST"] = s.dockerHost
 	}
 	for k, v := range params {
 		baseEnv[pipeline.EnvKey(k)] = v
@@ -289,6 +286,37 @@ func stepNetworkMode(dockerHost string) string {
 	}
 }
 
+// containerSpec is a step container's env, mounts and network (ADR 0006).
+// Only a docker step gets DOCKER_HOST and — for a loopback daemon — host
+// networking; every other step (and the checkout) runs on the daemon's
+// default bridge, where the loopback-bound daemon is unreachable. Secrets are
+// read-only files outside /src, their paths in PETAL_SECRET_<NAME>_FILE.
+func (s *Steps) containerSpec(step pipeline.Step, workDir string, baseEnv map[string]string) (env []string, mounts []mount.Mount, network string) {
+	env = make([]string, 0, len(baseEnv)+len(step.Env)+2)
+	for k, v := range baseEnv {
+		if k != "DOCKER_HOST" {
+			env = append(env, k+"="+v)
+		}
+	}
+	for k, v := range step.Env {
+		if k != "DOCKER_HOST" {
+			env = append(env, k+"="+v)
+		}
+	}
+	env = append(env, "PETAL_STEP="+step.Name) // documented in the README; useful with concurrent steps
+	if step.Docker && s.dockerHost != "" {
+		env = append(env, "DOCKER_HOST="+s.dockerHost)
+		network = stepNetworkMode(s.dockerHost)
+	}
+	mounts = []mount.Mount{{Type: mount.TypeBind, Source: workDir, Target: "/src"}}
+	for _, sec := range step.Secrets {
+		target := pipeline.SecretMountDir + "/" + sec
+		mounts = append(mounts, mount.Mount{Type: mount.TypeBind, Source: filepath.Join(s.secretsDir, sec), Target: target, ReadOnly: true})
+		env = append(env, pipeline.SecretEnvKey(sec)+"="+target)
+	}
+	return env, mounts, network
+}
+
 // runStep pulls the image, creates and starts the container, streams
 // stdout/stderr into the step's log file, waits, and removes the container.
 func (s *Steps) runStep(ctx context.Context, runID string, step pipeline.Step, workDir, logDir string, baseEnv map[string]string) (exit int, err error) {
@@ -299,8 +327,9 @@ func (s *Steps) runStep(ctx context.Context, runID string, step pipeline.Step, w
 		return -1, fmt.Errorf("open log: %w", err)
 	}
 	defer logFile.Close()
-	if net := stepNetworkMode(s.dockerHost); net != "" {
-		fmt.Fprintf(logFile, "$ docker run --network %s --workdir /src --env (see events) %s\n", net, step.Image)
+	env, mounts, network := s.containerSpec(step, workDir, baseEnv)
+	if network != "" {
+		fmt.Fprintf(logFile, "$ docker run --network %s --workdir /src --env (see events) %s\n", network, step.Image)
 	} else {
 		fmt.Fprintf(logFile, "$ docker run --workdir /src --env (see events) %s\n", step.Image)
 	}
@@ -314,21 +343,6 @@ func (s *Steps) runStep(ctx context.Context, runID string, step pipeline.Step, w
 	_, _ = io.Copy(logFile, rc)
 	rc.Close()
 
-	env := make([]string, 0, len(baseEnv)+len(step.Env))
-	for k, v := range baseEnv {
-		env = append(env, k+"="+v)
-	}
-	for k, v := range step.Env {
-		env = append(env, k+"="+v)
-	}
-	env = append(env, "PETAL_STEP="+step.Name) // documented in the README; useful with concurrent steps
-	mounts := []mount.Mount{{Type: mount.TypeBind, Source: workDir, Target: "/src"}}
-	for _, sec := range step.Secrets { // ADR 0006: files, never env; outside /src
-		target := pipeline.SecretMountDir + "/" + sec
-		mounts = append(mounts, mount.Mount{Type: mount.TypeBind, Source: filepath.Join(s.secretsDir, sec), Target: target, ReadOnly: true})
-		env = append(env, pipeline.SecretEnvKey(sec)+"="+target)
-	}
-
 	ctr, err := s.cli.ContainerCreate(ctx, &container.Config{
 		Image:      step.Image,
 		Env:        env,
@@ -337,7 +351,7 @@ func (s *Steps) runStep(ctx context.Context, runID string, step pipeline.Step, w
 		WorkingDir: "/src",
 		Labels:     map[string]string{"petal.run": runID, "petal.step": step.Name},
 	}, &container.HostConfig{
-		NetworkMode: container.NetworkMode(stepNetworkMode(s.dockerHost)),
+		NetworkMode: container.NetworkMode(network),
 		Mounts:      mounts,
 		AutoRemove:  false,
 	}, nil, nil, name)

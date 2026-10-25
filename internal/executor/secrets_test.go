@@ -68,9 +68,9 @@ func newSecretsHarness(t *testing.T, pipelineYAML string) *secretsHarness {
 		t.Fatal(err)
 	}
 	allow := repos.Allowlist{"homelab": {Alias: "homelab", URL: "https://example.invalid/h.git", DefaultRef: "main",
-		Secrets: []string{"e2e-canary", "absent"}, SecretRefs: []string{"main"}}}
+		Secrets: []string{"e2e-canary", "absent"}, Docker: true, TrustedRefs: []string{"main"}}}
 	s := NewSteps(store, t.TempDir(), t.TempDir(), "tcp://127.0.0.1:1", allow, nil)
-	s.ConfigureSecrets(secDir, nil)
+	s.ConfigureSecrets(secDir, nil, false)
 	h := &secretsHarness{store: store, steps: s}
 	s.runner = func(_ context.Context, _ string, st pipeline.Step, workDir, _ string, _ map[string]string) (int, error) {
 		if st.Name == pipeline.CheckoutStep {
@@ -151,5 +151,43 @@ func TestStepsWithoutSecretsNeedNoGrant(t *testing.T) {
 	h := newSecretsHarness(t, "steps:\n  - name: plain\n    image: alpine:3.21\n    run: true\n")
 	if res := h.run(t, "feature/x"); res.Status != runs.StatusSucceeded {
 		t.Errorf("a pipeline without secrets runs at any ref: %+v", res)
+	}
+}
+
+func TestDockerIsAGrant(t *testing.T) {
+	docker := "steps:\n  - name: build\n    image: docker:27-cli\n    run: docker info\n    docker: true\n"
+	h := newSecretsHarness(t, docker)
+	if res := h.run(t, "main"); res.Status != runs.StatusSucceeded || len(h.ran) != 1 || !h.ran[0].Docker {
+		t.Fatalf("docker at a trusted ref: %+v ran=%+v", res, h.ran)
+	}
+	h = newSecretsHarness(t, docker)
+	res := h.run(t, "feature/x")
+	if res.Status != runs.StatusFailed || !strings.Contains(res.Error, "requests docker") || len(h.ran) != 0 {
+		t.Errorf("docker off trusted refs must be refused before any step: %+v ran=%d", res, len(h.ran))
+	}
+}
+
+func TestContainerSpecGivesTheDaemonOnlyToDockerSteps(t *testing.T) {
+	s := &Steps{dockerHost: "tcp://127.0.0.1:2375", secretsDir: "/etc/petal-secrets"}
+	base := map[string]string{"PETAL_RUN_ID": "r", "DOCKER_HOST": "tcp://smuggled:1"}
+
+	env, mounts, network := s.containerSpec(pipeline.Step{Name: "lint",
+		Env: map[string]string{"DOCKER_HOST": "tcp://127.0.0.1:2375"}}, "/data/work/r", base)
+	joined := strings.Join(env, "\n")
+	if network != "" || strings.Contains(joined, "DOCKER_HOST") {
+		t.Errorf("non-docker step must get the bridge and no DOCKER_HOST: net=%q env=%v", network, env)
+	}
+	if len(mounts) != 1 || mounts[0].Target != "/src" {
+		t.Errorf("non-secret step mounts = %+v", mounts)
+	}
+
+	env, mounts, network = s.containerSpec(pipeline.Step{Name: "build", Docker: true, Secrets: []string{"ghcr-push"}}, "/data/work/r", base)
+	joined = strings.Join(env, "\n")
+	if network != "host" || !strings.Contains(joined, "DOCKER_HOST=tcp://127.0.0.1:2375") || strings.Contains(joined, "smuggled") {
+		t.Errorf("docker step: net=%q env=%v", network, env)
+	}
+	if len(mounts) != 2 || mounts[1].Target != "/run/petal/secrets/ghcr-push" || !mounts[1].ReadOnly ||
+		!strings.Contains(joined, "PETAL_SECRET_GHCR_PUSH_FILE=/run/petal/secrets/ghcr-push") {
+		t.Errorf("secret mount/env: %+v %v", mounts, env)
 	}
 }

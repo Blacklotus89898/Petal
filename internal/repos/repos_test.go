@@ -122,7 +122,8 @@ repos:
     url: https://github.com/Blacklotus89898/Tulip.git
     default_ref: main
     secrets: [a, b]
-    secret_refs: [main, release]
+    docker: true
+    trusted_refs: [main, release]
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -131,21 +132,37 @@ repos:
 		t.Errorf("self secrets = %v", c.SelfSecrets)
 	}
 	h := c.Repos["homelab"]
-	if got := h.SecretsAt("main"); len(got) != 1 { // secret_refs defaults to [default_ref]
-		t.Errorf("homelab@main = %v", got)
+	if got, docker := h.GrantsAt("main"); len(got) != 1 || docker { // trusted_refs defaults to [default_ref]
+		t.Errorf("homelab@main = %v docker=%v", got, docker)
 	}
-	if got := h.SecretsAt("feature"); got != nil {
+	if got, _ := h.GrantsAt("feature"); got != nil {
 		t.Errorf("homelab@feature must get nothing, got %v", got)
 	}
-	if got := c.Repos["tulip"].SecretsAt("release"); len(got) != 2 {
-		t.Errorf("tulip@release = %v", got)
+	if got, docker := c.Repos["tulip"].GrantsAt("release"); len(got) != 2 || !docker {
+		t.Errorf("tulip@release = %v docker=%v", got, docker)
+	}
+	if _, docker := c.Repos["tulip"].GrantsAt("feature"); docker {
+		t.Error("docker must not be granted off trusted_refs")
+	}
+	if c2, err := LoadConfig(write(t, `
+self:
+  docker: true
+repos:
+  p:
+    url: https://e/p.git
+    docker: true
+`)); err != nil || !c2.SelfDocker {
+		t.Errorf("docker-only grants: %+v %v", c2, err)
+	} else if _, d := c2.Repos["p"].GrantsAt("main"); !d {
+		t.Error("docker-only repo grant should default trusted_refs to default_ref")
 	}
 
 	for name, body := range map[string]string{
 		"bad name":   "repos:\n  x:\n    url: https://e/x.git\n    secrets: [Bad_Name]\n",
 		"duplicate":  "repos:\n  x:\n    url: https://e/x.git\n    secrets: [a, a]\n",
-		"refs alone": "repos:\n  x:\n    url: https://e/x.git\n    secret_refs: [main]\n",
-		"bad ref":    "repos:\n  x:\n    url: https://e/x.git\n    secrets: [a]\n    secret_refs: [-x]\n",
+		"refs alone": "repos:\n  x:\n    url: https://e/x.git\n    trusted_refs: [main]\n",
+		"bad ref":    "repos:\n  x:\n    url: https://e/x.git\n    secrets: [a]\n    trusted_refs: [-x]\n",
+		"old key":    "repos:\n  x:\n    url: https://e/x.git\n    secrets: [a]\n    secret_refs: [main]\n",
 		"bad self":   "self:\n  secrets: [\"../etc\"]\n",
 	} {
 		if _, err := LoadConfig(write(t, body)); err == nil {

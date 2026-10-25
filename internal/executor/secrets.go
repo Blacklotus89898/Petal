@@ -19,36 +19,48 @@ import (
 // ConfigureSecrets sets where secret files live (the mounted Kubernetes
 // Secret — the same path in the dind container) and what the self repo is
 // granted. Unset dir = no secrets: any step that requests one fails its run.
-func (s *Steps) ConfigureSecrets(dir string, self []string) {
-	s.secretsDir, s.selfSecrets = dir, self
+func (s *Steps) ConfigureSecrets(dir string, self []string, selfDocker bool) {
+	s.secretsDir, s.selfSecrets, s.selfDocker = dir, self, selfDocker
 }
 
-// grantedSecrets returns what this run may use and a description of the
-// scope for error messages. Repo runs are granted only at their secret_refs.
-func (s *Steps) grantedSecrets(repo, ref string) (granted []string, scope string) {
+// grant is what one run may use (ADR 0006).
+type grant struct {
+	secrets []string
+	docker  bool
+	scope   string // for error messages
+}
+
+// grantFor resolves a run's privileges. Repo runs get them only at their
+// trusted_refs; the self repo (git-synced main) per the self config.
+func (s *Steps) grantFor(repo, ref string) grant {
 	if repo == "" {
-		return s.selfSecrets, "the self repo"
+		return grant{secrets: s.selfSecrets, docker: s.selfDocker, scope: "the self repo"}
 	}
 	r := s.repos[repo]
 	if ref == "" {
 		ref = r.DefaultRef
 	}
-	return r.SecretsAt(ref), fmt.Sprintf("repo %q at ref %q", repo, ref)
+	sec, docker := r.GrantsAt(ref)
+	return grant{secrets: sec, docker: docker, scope: fmt.Sprintf("repo %q at ref %q", repo, ref)}
 }
 
-// loadSecrets checks every requested secret is granted and reads its value
-// (fresh per run, so a rotation applies without a restart). Fails before any
-// step starts.
-func (s *Steps) loadSecrets(spec *pipeline.Pipeline, granted []string, scope string) (map[string]string, error) {
+// loadSecrets checks every step's requests (docker, secrets) are granted and
+// reads the secret values (fresh per run, so a rotation applies without a
+// restart). Fails before any step starts.
+func (s *Steps) loadSecrets(spec *pipeline.Pipeline, g grant) (map[string]string, error) {
 	ok := map[string]bool{}
-	for _, g := range granted {
-		ok[g] = true
+	for _, name := range g.secrets {
+		ok[name] = true
 	}
+	scope := g.scope
 	vals := map[string]string{}
 	for _, st := range spec.Steps {
+		if st.Docker && !g.docker {
+			return nil, fmt.Errorf("step %q requests docker, which %s is not granted (Petal config: docker/trusted_refs)", st.Name, scope)
+		}
 		for _, name := range st.Secrets {
 			if !ok[name] {
-				return nil, fmt.Errorf("step %q requests secret %q, which %s is not granted (Petal config: secrets/secret_refs)", st.Name, name, scope)
+				return nil, fmt.Errorf("step %q requests secret %q, which %s is not granted (Petal config: secrets/trusted_refs)", st.Name, name, scope)
 			}
 			if _, done := vals[name]; done {
 				continue

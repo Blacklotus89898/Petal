@@ -20,20 +20,22 @@ type Repo struct {
 	Alias      string `json:"alias"`
 	URL        string `json:"url"`
 	DefaultRef string `json:"default_ref"`
-	// Secrets granted to runs of this repo, only at SecretRefs (ADR 0006).
-	Secrets    []string `json:"secrets,omitempty"`
-	SecretRefs []string `json:"secret_refs,omitempty"`
+	// Privileges granted to runs of this repo, only at TrustedRefs (ADR 0006):
+	// secrets by name, and Docker = steps may drive the DinD daemon.
+	Secrets     []string `json:"secrets,omitempty"`
+	Docker      bool     `json:"docker,omitempty"`
+	TrustedRefs []string `json:"trusted_refs,omitempty"`
 }
 
-// SecretsAt returns the secrets a run of this repo at ref is granted: all of
-// Secrets when ref is one of SecretRefs, none otherwise (ADR 0006).
-func (r Repo) SecretsAt(ref string) []string {
-	for _, sr := range r.SecretRefs {
-		if sr == ref {
-			return r.Secrets
+// GrantsAt returns what a run of this repo at ref is granted: everything when
+// ref is one of TrustedRefs, nothing otherwise (ADR 0006).
+func (r Repo) GrantsAt(ref string) (secrets []string, docker bool) {
+	for _, tr := range r.TrustedRefs {
+		if tr == ref {
+			return r.Secrets, r.Docker
 		}
 	}
-	return nil
+	return nil, false
 }
 
 // Allowlist maps alias → repo. The zero value allows nothing (self repo only).
@@ -55,19 +57,22 @@ type Schedule struct {
 type Config struct {
 	Repos     Allowlist
 	Schedules []Schedule
-	// SelfSecrets are granted to runs of the git-synced self repo (ADR 0006).
+	// Granted to runs of the git-synced self repo (ADR 0006).
 	SelfSecrets []string
+	SelfDocker  bool
 }
 
 type fileSpec struct {
 	Self struct {
 		Secrets []string `yaml:"secrets"`
+		Docker  bool     `yaml:"docker"`
 	} `yaml:"self"`
 	Repos map[string]struct {
-		URL        string   `yaml:"url"`
-		DefaultRef string   `yaml:"default_ref"`
-		Secrets    []string `yaml:"secrets"`
-		SecretRefs []string `yaml:"secret_refs"`
+		URL         string   `yaml:"url"`
+		DefaultRef  string   `yaml:"default_ref"`
+		Secrets     []string `yaml:"secrets"`
+		Docker      bool     `yaml:"docker"`
+		TrustedRefs []string `yaml:"trusted_refs"`
 	} `yaml:"repos"`
 	Schedules []Schedule `yaml:"schedules"`
 }
@@ -148,19 +153,20 @@ func LoadConfig(path string) (Config, error) {
 		if err := checkSecretNames(r.Secrets); err != nil {
 			return Config{}, fmt.Errorf("%s: repo %q: %w", path, alias, err)
 		}
-		secretRefs := r.SecretRefs
-		if len(secretRefs) == 0 && len(r.Secrets) > 0 {
-			secretRefs = []string{ref}
+		privileged := len(r.Secrets) > 0 || r.Docker
+		trusted := r.TrustedRefs
+		if len(trusted) == 0 && privileged {
+			trusted = []string{ref}
 		}
-		for _, sr := range secretRefs {
-			if !ValidRef(sr) {
-				return Config{}, fmt.Errorf("%s: repo %q: invalid secret_ref %q", path, alias, sr)
+		for _, tr := range trusted {
+			if !ValidRef(tr) {
+				return Config{}, fmt.Errorf("%s: repo %q: invalid trusted_ref %q", path, alias, tr)
 			}
 		}
-		if len(r.Secrets) == 0 && len(r.SecretRefs) > 0 {
-			return Config{}, fmt.Errorf("%s: repo %q: secret_refs without secrets", path, alias)
+		if !privileged && len(r.TrustedRefs) > 0 {
+			return Config{}, fmt.Errorf("%s: repo %q: trusted_refs without secrets or docker", path, alias)
 		}
-		out[alias] = Repo{Alias: alias, URL: r.URL, DefaultRef: ref, Secrets: r.Secrets, SecretRefs: secretRefs}
+		out[alias] = Repo{Alias: alias, URL: r.URL, DefaultRef: ref, Secrets: r.Secrets, Docker: r.Docker, TrustedRefs: trusted}
 	}
 	if err := checkSecretNames(spec.Self.Secrets); err != nil {
 		return Config{}, fmt.Errorf("%s: self: %w", path, err)
@@ -183,7 +189,7 @@ func LoadConfig(path string) (Config, error) {
 		}
 		seen[sch.ID] = true
 	}
-	return Config{Repos: out, Schedules: spec.Schedules, SelfSecrets: spec.Self.Secrets}, nil
+	return Config{Repos: out, Schedules: spec.Schedules, SelfSecrets: spec.Self.Secrets, SelfDocker: spec.Self.Docker}, nil
 }
 
 // List returns the repos sorted by alias (stable API output).

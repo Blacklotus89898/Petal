@@ -13,8 +13,11 @@ params:
 
 steps:
   - name: build
-    # docker:27-cli has buildx and talks to the dind sidecar via DOCKER_HOST.
+    # docker:27-cli has buildx and talks to the dind sidecar via DOCKER_HOST —
+    # which only a `docker: true` step gets, and only where Petal's config
+    # grants docker to the repo at this ref (ADR 0006).
     image: docker:27-cli
+    docker: true
     run: |
       docker buildx build \
         --file Dockerfile \

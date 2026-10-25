@@ -88,6 +88,10 @@ type Step struct {
 	// Secrets the step requests (names only); granted per repo+ref in
 	// Petal's config and mounted as files (ADR 0006).
 	Secrets []string `yaml:"secrets,omitempty" json:"secrets,omitempty"`
+	// Docker: the step may drive the DinD daemon (DOCKER_HOST, host network).
+	// A grant like secrets: without it a step runs on the daemon's bridge
+	// with no daemon access (ADR 0006).
+	Docker bool `yaml:"docker,omitempty" json:"docker,omitempty"`
 
 	TimeoutDur time.Duration `yaml:"-" json:"-"`
 }
@@ -133,6 +137,7 @@ type libStep struct {
 	Env         map[string]string `yaml:"env"`
 	Timeout     string            `yaml:"timeout"`
 	Secrets     []string          `yaml:"secrets"`
+	Docker      bool              `yaml:"docker"`
 }
 
 func pinned(image string) bool {
@@ -233,6 +238,7 @@ func resolveUses(st *Step, lib *library) error {
 	}
 	st.Image, st.Run, st.Env = ls.Image, ls.Run, env
 	st.Secrets = mergeNames(ls.Secrets, st.Secrets)
+	st.Docker = st.Docker || ls.Docker
 	if st.Timeout == "" {
 		st.Timeout = ls.Timeout
 	}

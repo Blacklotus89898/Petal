@@ -210,3 +210,16 @@ func TestStepSecrets(t *testing.T) {
 		t.Error("bad secret name must be rejected at load")
 	}
 }
+
+func TestDockerFlagMergesFromLibrary(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, ".petal/steps/build.yaml", "image: docker:27-cli\nrun: docker build .\ndocker: true\n")
+	writeFile(t, dir, ".petal/pipelines/p.yaml", "steps:\n  - name: a\n    uses: build\n  - name: b\n    image: alpine:3.21\n    run: true\n")
+	p, err := Get(dir, "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.Steps[0].Docker || p.Steps[1].Docker {
+		t.Errorf("docker flags = %v %v", p.Steps[0].Docker, p.Steps[1].Docker)
+	}
+}

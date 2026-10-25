@@ -90,8 +90,8 @@ Rules (full spec in ADR 0002, 0005):
 - `run` executes with `sh -c "set -eu"`; logs stream to
   `<data>/logs/<run_id>/<step>.log`.
 - Every step gets `PARAM_*` for each param, plus `PETAL_RUN_ID`,
-  `PETAL_PIPELINE`, `PETAL_STEP`, `PETAL_TRIGGER`, `PETAL_ARGS_JSON`, and
-  `DOCKER_HOST` (for image-building steps).
+  `PETAL_PIPELINE`, `PETAL_STEP`, `PETAL_TRIGGER`, `PETAL_ARGS_JSON`;
+  `DOCKER_HOST` only for `docker: true` steps (ADR 0006).
 - `outputs` files are read after success and recorded as the run's output
   event.
 - The executor talks the Docker Engine API (`DOCKER_HOST` — the DinD sidecar
@@ -148,28 +148,34 @@ The `stub` executor (`-executor stub`, the default) simulates runs without
 Docker — handy for UI development; `{"simulate":"failure"}` exercises failure
 paths.
 
-### Secrets (ADR 0006)
+### Secrets and docker access (ADR 0006)
 
 ```yaml
 steps:
   - name: push
     image: docker:27-cli
+    docker: true               # request the DinD daemon (DOCKER_HOST, host net)
     secrets: [ghcr-push]       # request by name; library steps may too
     run: docker login ghcr.io -u x --password-stdin < "$PETAL_SECRET_GHCR_PUSH_FILE"
 ```
 
 - **Granted in Petal's config, never by a pipeline**: `self.secrets` for the
-  git-synced self repo, `repos.<alias>.secrets` + `secret_refs` (default:
+  git-synced self repo, `repos.<alias>.secrets` + `trusted_refs` (default:
   `[default_ref]`) for allowlisted repos. A run at any other ref — a branch,
   a tag, a SHA — gets none; a step requesting an ungranted secret fails the
-  run before any step starts.
+  run before any step starts. `docker: true` (repo or `self`) is granted the
+  same way.
+- **Docker is a privilege.** Steps without `docker: true` get no
+  `DOCKER_HOST` and run on the daemon's bridge (the daemon listens on
+  loopback only). A docker step can reach everything the privileged daemon
+  can — all secrets included — so grant docker only where you'd grant all.
 - Values are files in `-secrets <dir>` (a mounted Kubernetes Secret, the same
   path in the dind container), re-read per run. Each requested secret is
   mounted read-only at `/run/petal/secrets/<name>`, path in
   `PETAL_SECRET_<NAME>_FILE` — never env, never under `/src`.
 - Every value of the run's secrets is masked as `***` in step logs, outputs
   and errors. Best-effort: encoded values pass. The allowlist and branch
-  protection on `secret_refs` are the real boundary.
+  protection on `trusted_refs` are the real boundary.
 
 ## Quickstart (dev on Windows)
 

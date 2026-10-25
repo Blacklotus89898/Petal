@@ -80,7 +80,7 @@ func main() {
 	var repoPipes api.RepoPipelinesFunc
 	if *execName == "steps" {
 		steps := executor.NewSteps(store, *workdir, *dataDir, os.Getenv("DOCKER_HOST"), allow, logger)
-		steps.ConfigureSecrets(*secretsDir, cfg.SelfSecrets)
+		steps.ConfigureSecrets(*secretsDir, cfg.SelfSecrets, cfg.SelfDocker)
 		exec, repoPipes = steps, steps.RepoPipelines
 	}
 	logger.Info("executor selected", "executor", exec.Name())
