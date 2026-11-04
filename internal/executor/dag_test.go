@@ -237,3 +237,45 @@ func TestCancelRequestCancelsTheRunAndKeepsTheAuditTrail(t *testing.T) {
 		t.Errorf("cancellation events lost:\n%s", ev)
 	}
 }
+
+func TestPlanEventRecordsTheGraph(t *testing.T) {
+	cases := []struct {
+		name, yaml, want string
+	}{
+		{"DAG edges as declared",
+			"max_parallel: 3\nsteps:\n  - name: deploy\n" + stepLine + "    needs: [lint, test]\n  - name: lint\n" + stepLine + "    needs: []\n  - name: test\n" + stepLine + "    needs: []\n",
+			`plan {"dag":true,"max_parallel":3,"steps":[{"name":"deploy","needs":["lint","test"],"image":"alpine:3.21"},{"name":"lint","needs":[],"image":"alpine:3.21"},{"name":"test","needs":[],"image":"alpine:3.21"}]}`},
+		{"file order becomes a chain, one at a time",
+			"steps:\n  - name: a\n" + stepLine + "  - name: b\n" + stepLine,
+			`plan {"dag":false,"max_parallel":1,"steps":[{"name":"a","needs":[],"image":"alpine:3.21"},{"name":"b","needs":["a"],"image":"alpine:3.21"}]}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newDAGHarness(t, tc.yaml, &fakeRunner{})
+			run, res := h.execute(t, context.Background())
+			if res.Status != runs.StatusSucceeded {
+				t.Fatalf("result = %+v", res)
+			}
+			ev := h.events(t, run.ID)
+			if !strings.Contains(ev, tc.want+"\n") {
+				t.Errorf("want %s in:\n%s", tc.want, ev)
+			}
+			if strings.Index(ev, "plan ") > strings.Index(ev, "step.started") {
+				t.Errorf("plan must precede the first step:\n%s", ev)
+			}
+		})
+	}
+}
+
+func TestPlanPayloadHangsRootsOffCheckout(t *testing.T) {
+	spec := &pipeline.Pipeline{DAG: true, MaxParallel: 2, Steps: []pipeline.Step{
+		{Name: "lint", Needs: []string{}}, {Name: "build", Needs: []string{"lint"}},
+	}}
+	steps := planPayload(spec, true)["steps"].([]planStep)
+	if len(steps) != 3 || steps[0].Name != pipeline.CheckoutStep || len(steps[0].Needs) != 0 {
+		t.Fatalf("checkout must be the first, edge-less node: %+v", steps)
+	}
+	if strings.Join(steps[1].Needs, ",") != pipeline.CheckoutStep || strings.Join(steps[2].Needs, ",") != "lint" {
+		t.Errorf("roots hang off checkout, other edges unchanged: %+v", steps)
+	}
+}

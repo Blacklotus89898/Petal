@@ -133,6 +133,9 @@ func (s *Steps) Execute(ctx context.Context, run runs.Run) Result {
 	if err != nil {
 		return Result{Status: runs.StatusFailed, Error: err.Error()}
 	}
+	// The run's own copy of its graph: the spec lives in a scratch workspace and
+	// the file may change later, so the step view is drawn from this event.
+	s.emit(ctx, run.ID, "plan", planPayload(spec, run.Repo != ""))
 
 	args, err := parseArgs(run.ArgsJSON)
 	if err != nil {

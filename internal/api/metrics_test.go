@@ -18,6 +18,11 @@ func TestMetrics(t *testing.T) {
 	if claimed == nil || claimed.ID != run.ID {
 		t.Fatalf("claim: %+v", claimed)
 	}
+	_ = store.AppendEvent(ctx, run.ID, "step.started", `{"step":"yamllint"}`)
+	_ = store.AppendEvent(ctx, run.ID, "step.finished", `{"step":"yamllint","exit":0}`)
+	_ = store.AppendEvent(ctx, run.ID, "step.started", `{"step":"ports"}`)
+	_ = store.AppendEvent(ctx, run.ID, "step.finished", `{"step":"ports","exit":1,"error":"step \"ports\" failed (exit 1)"}`)
+	_ = store.AppendEvent(ctx, run.ID, "step.skipped", `{"step":"report"}`)
 	_ = store.Finish(ctx, run.ID, runs.StatusSucceeded, "")
 	_, _ = store.Enqueue(ctx, "docker-image", "", "{}", "api", "", "") // stays queued, self repo
 
@@ -35,6 +40,10 @@ func TestMetrics(t *testing.T) {
 		"petal_runs_queued 1",
 		"petal_runs_running 0",
 		"petal_repos 1",
+		`petal_steps_total{pipeline="validate",repo="homelab",step="yamllint",status="succeeded"} 1`,
+		`petal_steps_total{pipeline="validate",repo="homelab",step="ports",status="failed"} 1`,
+		`petal_steps_total{pipeline="validate",repo="homelab",step="report",status="skipped"} 1`,
+		`petal_step_duration_seconds_count{pipeline="validate",repo="homelab",step="ports",status="failed"} 1`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %q in:\n%s", want, body)

@@ -241,13 +241,13 @@ The container is a distroless static image (~20MB) — no OS packages, no shell.
 | GET | `/api/runs?limit=50` | Recent runs; filters `pipeline=`, `trigger_kind=`, `repo=`, `source=` (trigger_source prefix, e.g. `backstage:component:default/petal%23`) |
 | POST | `/api/runs` | 🔒 Trigger a run: `{"pipeline":"docker-image","args":{}}` — optional `trigger_kind` (`api`\|`backstage`), `trigger_source`, `dedup_key`, and `repo` (allowlist alias) + `ref` (branch/tag/SHA, default the repo's `default_ref`) for a multi-repo run (ADR 0004). Self-repo unknown pipeline → 404; unknown repo / bad ref → 400 |
 | GET | `/api/repos` | Multi-repo allowlist (`-repos` file): alias, URL, default ref |
-| GET | `/api/runs/{id}` | Run detail + audit events (step.started / step.finished / output) |
+| GET | `/api/runs/{id}` | Run detail + audit events (plan / step.started / step.finished / output) + `graph`: the run's step graph — each step's `needs`, status (`pending`·`running`·`succeeded`·`failed`·`canceled`·`skipped`), timing, exit and error (ADR 0007) |
 | POST | `/api/runs/{id}/cancel` | 🔒 Cancel a run: queued → `canceled` at once (200); running → step containers killed, unstarted steps skipped, run ends `canceled` (202); finished → 409 |
 | GET | `/api/runs/{id}/logs/{step}` | Step log (text/plain, live while the step runs) |
 | POST | `/api/triggers/github` | Signed webhook (HMAC-SHA256, header `X-Petal-Signature`) for CI triggers; enables with `PETAL_TRIGGER_TOKEN` env; dedups on `git_sha:pipeline` |
 | GET | `/api/schedules` | List cron schedules (`decl-*` ones come from the config file and are re-synced at startup) |
 | POST | `/api/schedules` | 🔒 Create a schedule: `{"pipeline":"docker-image","cron":"*/15 * * * *","args":{}}` — optional `repo` + `ref` |
-| GET | `/metrics` | Prometheus exposition: `petal_runs_total`, `petal_run_duration_seconds`, `petal_run_last_finished_timestamp_seconds` (by pipeline/repo/status), `petal_runs_queued`, `petal_runs_running`, `petal_schedules`, `petal_repos` — computed from the registry at scrape time |
+| GET | `/metrics` | Prometheus exposition: `petal_runs_total`, `petal_run_duration_seconds`, `petal_run_last_finished_timestamp_seconds` (by pipeline/repo/status), `petal_steps_total` + `petal_step_duration_seconds` (by pipeline/repo/step/status, ADR 0007), `petal_runs_queued`, `petal_runs_running`, `petal_schedules`, `petal_repos` — computed from the registry at scrape time |
 | DELETE | `/api/schedules/{id}` | 🔒 Delete a schedule |
 | POST | `/api/schedules/{id}/toggle` | 🔒 Enable/disable a schedule |
 
@@ -295,4 +295,5 @@ docs/adr/                     # architecture decision records
 - [x] **Declarative schedules**: `schedules:` in the config file, synced at startup (git owns them)
 - [ ] **D — catalog**: ArgoCD/K8s views, scorecards, notifications
 - [x] **Modular + DAG steps** (ADR 0005): `uses:` step library, `needs` DAG with bounded concurrency, step/run timeouts, cancel API
+- [x] **Step graph + step metrics** (ADR 0007): recorded `plan` per run, live DAG view with per-step status in the console, per-pipeline health strip, `petal_steps_total` / `petal_step_duration_seconds`
 - [ ] petal CLI scaffolding

@@ -68,6 +68,28 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 			lbl(st.Pipeline), lbl(repoLabel(st.Repo)), lbl(st.Status), st.LastFinished)
 	}
 
+	steps, err := s.store.StepStats(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	b.WriteString("# HELP petal_steps_total Step outcomes recorded in the registry (succeeded, failed, canceled, skipped).\n")
+	b.WriteString("# TYPE petal_steps_total counter\n")
+	for _, st := range steps {
+		fmt.Fprintf(&b, "petal_steps_total{pipeline=\"%s\",repo=\"%s\",step=\"%s\",status=\"%s\"} %d\n",
+			lbl(st.Pipeline), lbl(repoLabel(st.Repo)), lbl(st.Step), lbl(st.Status), st.Count)
+	}
+	b.WriteString("# HELP petal_step_duration_seconds Wall time of finished steps (started to finished).\n")
+	b.WriteString("# TYPE petal_step_duration_seconds summary\n")
+	for _, st := range steps {
+		if st.Status == "skipped" {
+			continue
+		}
+		l := fmt.Sprintf("pipeline=\"%s\",repo=\"%s\",step=\"%s\",status=\"%s\"", lbl(st.Pipeline), lbl(repoLabel(st.Repo)), lbl(st.Step), lbl(st.Status))
+		fmt.Fprintf(&b, "petal_step_duration_seconds_sum{%s} %g\n", l, st.DurationSum)
+		fmt.Fprintf(&b, "petal_step_duration_seconds_count{%s} %d\n", l, st.Count)
+	}
+
 	b.WriteString("# HELP petal_runs_queued Runs waiting for a worker.\n# TYPE petal_runs_queued gauge\n")
 	fmt.Fprintf(&b, "petal_runs_queued %d\n", queued)
 	b.WriteString("# HELP petal_runs_running Runs currently executing.\n# TYPE petal_runs_running gauge\n")

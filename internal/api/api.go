@@ -207,7 +207,9 @@ func (s *Server) getRun(w http.ResponseWriter, r *http.Request) {
 	if events == nil {
 		events = []runs.Event{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"run": run, "events": events})
+	// graph: the run's step graph with per-step status, derived server-side so
+	// every client (UI, Backstage card) draws the same thing.
+	writeJSON(w, http.StatusOK, map[string]any{"run": run, "events": events, "graph": runs.BuildGraph(*run, events)})
 }
 
 // requireToken guards a mutating handler with the API bearer token.
