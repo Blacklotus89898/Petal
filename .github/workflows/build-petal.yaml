@@ -68,13 +68,14 @@ jobs:
       - name: Scan image for vulnerabilities
         id: trivy
         if: steps.build.outcome == 'success'
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0 (master broke 2026-11: setup-trivy exit 6)
-        with:
-          image-ref: ghcr.io/blacklotus89898/petal:${{ github.sha }}
-          format: sarif
-          output: trivy-image.sarif
-          severity: CRITICAL,HIGH
-          exit-code: '0'
+        # Trivy from its pinned container image, not trivy-action: the action's
+        # setup-trivy installer started failing (curl exit 6) on every version
+        # in 2026-11. The socket mount covers PR builds (image only loaded locally).
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/out" \
+            aquasec/trivy:0.70.0 image --format sarif --output /out/trivy-image.sarif \
+            --severity CRITICAL,HIGH --exit-code 0 \
+            ghcr.io/blacklotus89898/petal:${{ github.sha }}
 
       - name: Upload Trivy results to GitHub Security tab
         if: steps.trivy.outcome == 'success'
