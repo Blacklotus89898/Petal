@@ -23,6 +23,7 @@ import (
 	"github.com/Blacklotus89898/Petal/internal/executor"
 	"github.com/Blacklotus89898/Petal/internal/notify"
 	"github.com/Blacklotus89898/Petal/internal/repos"
+	"github.com/Blacklotus89898/Petal/internal/retention"
 	"github.com/Blacklotus89898/Petal/internal/runs"
 	"github.com/Blacklotus89898/Petal/internal/scheduler"
 )
@@ -38,6 +39,9 @@ func main() {
 	execName := flag.String("executor", "stub", "executor: stub or steps")
 	workdir := flag.String("workdir", ".", "source workdir pipelines are loaded from (steps executor)")
 	reposPath := flag.String("repos", "", "config YAML: multi-repo allowlist (ADR 0004) + declared schedules; missing file = self repo only")
+	retentionAge := flag.Duration("retention", 30*24*time.Hour, "prune finished runs (registry rows, events, step logs) older than this; 0 = keep forever (ADR 0009)")
+	retentionKeep := flag.Int("retention-keep", 20, "always keep the newest N finished runs per pipeline+repo, whatever their age")
+	retentionEvery := flag.Duration("retention-every", 6*time.Hour, "how often the retention janitor sweeps (also once at startup)")
 	ntfyURL := flag.String("ntfy-url", "", "ntfy base URL for run notifications (ADR 0008); empty = off")
 	ntfyTopic := flag.String("ntfy-topic", "petal", "ntfy topic for run notifications")
 	publicURL := flag.String("public-url", "", "console URL used in notification links, e.g. https://petal.lab.home")
@@ -106,8 +110,16 @@ func main() {
 	go pool.Start(ctx)
 	go pool.RunCronLoop(ctx)
 
+	// ADR 0009: bounded registry + step logs. Sweeps at startup, then periodically.
+	janitor := &retention.Janitor{Store: store, LogsDir: filepath.Join(*dataDir, "logs"),
+		MaxAge: *retentionAge, Keep: *retentionKeep, Every: *retentionEvery, Log: logger}
+	if *retentionAge > 0 {
+		go janitor.Run(ctx)
+	}
+
 	mux := http.NewServeMux()
 	api.Register(mux, store, api.Options{
+		Retention:     janitor,
 		TriggerToken:  os.Getenv("PETAL_TRIGGER_TOKEN"),
 		APIToken:      os.Getenv("PETAL_API_TOKEN"),
 		Workdir:       *workdir,

@@ -258,6 +258,9 @@ func (s *Store) ListFiltered(ctx context.Context, f Filter) ([]Run, error) {
 	if f.Limit <= 0 {
 		f.Limit = 50
 	}
+	if f.Limit > 500 {
+		f.Limit = 500 // a console page, not an export
+	}
 	q := `SELECT ` + runColumns + ` FROM runs WHERE 1=1`
 	var args []any
 	if f.Pipeline != "" {

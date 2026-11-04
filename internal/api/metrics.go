@@ -96,6 +96,20 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(&b, "petal_runs_running %d\n", running)
 	b.WriteString("# HELP petal_schedules Cron schedules by state.\n# TYPE petal_schedules gauge\n")
 	fmt.Fprintf(&b, "petal_schedules{state=\"enabled\"} %d\npetal_schedules{state=\"disabled\"} %d\n", enabled, disabled)
+	if sz, err := s.store.Size(r.Context()); err == nil {
+		b.WriteString("# HELP petal_db_bytes Size of the SQLite registry file (pages x page size; WAL excluded).\n# TYPE petal_db_bytes gauge\n")
+		fmt.Fprintf(&b, "petal_db_bytes %d\n", sz.Bytes)
+		b.WriteString("# HELP petal_db_rows Rows in the registry, by table.\n# TYPE petal_db_rows gauge\n")
+		fmt.Fprintf(&b, "petal_db_rows{table=\"runs\"} %d\npetal_db_rows{table=\"events\"} %d\n", sz.Runs, sz.Events)
+	}
+	if s.retention != nil {
+		b.WriteString("# HELP petal_retention_pruned_runs_total Runs deleted by the retention janitor since start (ADR 0009).\n# TYPE petal_retention_pruned_runs_total counter\n")
+		fmt.Fprintf(&b, "petal_retention_pruned_runs_total %d\n", s.retention.Pruned())
+		if t := s.retention.LastSweep(); !t.IsZero() {
+			b.WriteString("# HELP petal_retention_last_sweep_timestamp_seconds When the janitor last completed a sweep.\n# TYPE petal_retention_last_sweep_timestamp_seconds gauge\n")
+			fmt.Fprintf(&b, "petal_retention_last_sweep_timestamp_seconds %d\n", t.Unix())
+		}
+	}
 	b.WriteString("# HELP petal_repos Repos in the multi-repo allowlist.\n# TYPE petal_repos gauge\n")
 	fmt.Fprintf(&b, "petal_repos %d\n", len(s.repos))
 

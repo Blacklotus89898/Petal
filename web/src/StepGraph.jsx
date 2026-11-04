@@ -24,8 +24,14 @@ const PAD = 8
 export function stepDuration(step, now = Date.now()) {
   if (!step.started_at) return ''
   const end = step.finished_at ? Date.parse(step.finished_at) : now
-  const s = Math.max(0, (end - Date.parse(step.started_at)) / 1000)
-  return s < 60 ? `${s.toFixed(1)}s` : `${Math.floor(s / 60)}m${String(Math.round(s % 60)).padStart(2, '0')}s`
+  return fmtSeconds(Math.max(0, (end - Date.parse(step.started_at)) / 1000))
+}
+
+// fmtSeconds: 12.3s · 4m05s · 9h47m
+export function fmtSeconds(s) {
+  if (s < 60) return `${s.toFixed(1)}s`
+  if (s < 3600) return `${Math.floor(s / 60)}m${String(Math.floor(s % 60)).padStart(2, '0')}s`
+  return `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m`
 }
 
 function layout(graph) {

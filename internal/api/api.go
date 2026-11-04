@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Blacklotus89898/Petal/internal/pipeline"
 	"github.com/Blacklotus89898/Petal/internal/repos"
@@ -25,6 +26,7 @@ type Server struct {
 	repos         repos.Allowlist
 	repoPipes     RepoPipelinesFunc
 	cancelRunning func(runID string) bool
+	retention     RetentionStats
 }
 
 // RepoPipelinesFunc lists the pipelines in an allowlisted repo (the steps
@@ -53,11 +55,19 @@ type Options struct {
 	// CancelRunning stops a running run (the worker pool); false = not running
 	// here. Backs POST /api/runs/{id}/cancel together with the queued path.
 	CancelRunning func(runID string) bool
+	// Retention exposes the janitor's counters on /metrics (ADR 0009). Nil = off.
+	Retention RetentionStats
+}
+
+// RetentionStats is what /metrics reports about the retention janitor.
+type RetentionStats interface {
+	Pruned() int64
+	LastSweep() time.Time
 }
 
 // Register wires the API routes onto mux.
 func Register(mux *http.ServeMux, store *runs.Store, opts Options) {
-	s := &Server{store: store, triggerToken: opts.TriggerToken, apiToken: opts.APIToken, workdir: opts.Workdir, dataDir: opts.DataDir, repos: opts.Repos, repoPipes: opts.RepoPipelines, cancelRunning: opts.CancelRunning}
+	s := &Server{store: store, triggerToken: opts.TriggerToken, apiToken: opts.APIToken, workdir: opts.Workdir, dataDir: opts.DataDir, repos: opts.Repos, repoPipes: opts.RepoPipelines, cancelRunning: opts.CancelRunning, retention: opts.Retention}
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.HandleFunc("GET /api/runs", s.listRuns)
 	mux.HandleFunc("POST /api/runs", s.requireToken(s.createRun))

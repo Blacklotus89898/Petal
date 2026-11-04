@@ -9,6 +9,7 @@ import {
   Group,
   Loader,
   ScrollArea,
+  SegmentedControl,
   SimpleGrid,
   Table,
   Text,
@@ -17,16 +18,71 @@ import {
   Tooltip,
 } from '@mantine/core'
 import { useDisclosure, useInterval } from '@mantine/hooks'
-import StepGraph, { STEP_COLOR, stepDuration } from './StepGraph'
+import StepGraph, { STEP_COLOR, fmtSeconds, stepDuration } from './StepGraph'
 
 const STATUS_COLOR = { queued: 'gray', running: 'blue', succeeded: 'green', failed: 'red', canceled: 'orange' }
 
-const fmtTime = ts => (ts ? new Date(ts).toLocaleTimeString() : '—')
+// Date + time in the viewer's locale/zone ("Nov 4, 2026, 06:41:12"); the
+// exact UTC instant is in the tooltip (TimeCell).
+const DATE_TIME = { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }
+const fmtTime = ts => (ts ? new Date(ts).toLocaleString(undefined, DATE_TIME) : '—')
+
+function TimeCell({ ts }) {
+  if (!ts) return '—'
+  return (
+    <Tooltip label={new Date(ts).toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}>
+      <Text size="sm" style={{ whiteSpace: 'nowrap' }}>{fmtTime(ts)}</Text>
+    </Tooltip>
+  )
+}
+
+// durationMs: wall time of a run (running runs count up to now); null = not started.
+function durationMs(run) {
+  if (!run.started_at) return null
+  const end = run.finished_at ? new Date(run.finished_at) : new Date()
+  return end - new Date(run.started_at)
+}
 
 function fmtDuration(run) {
-  if (!run.started_at) return '—'
-  const end = run.finished_at ? new Date(run.finished_at) : new Date()
-  return `${((end - new Date(run.started_at)) / 1000).toFixed(1)}s`
+  const ms = durationMs(run)
+  if (ms == null) return '—'
+  return fmtSeconds(ms / 1000)
+}
+
+// Sortable run-table columns: key → value to compare (nulls always sort last).
+const STATUS_ORDER = { running: 0, queued: 1, failed: 2, canceled: 3, succeeded: 4 }
+const SORT_VALUE = {
+  id: r => r.id,
+  pipeline: r => `${r.repo || 'self'}/${r.pipeline}`,
+  trigger: r => r.trigger_kind,
+  status: r => STATUS_ORDER[r.status] ?? 9,
+  queued: r => (r.queued_at ? Date.parse(r.queued_at) : null),
+  finished: r => (r.finished_at ? Date.parse(r.finished_at) : null),
+  duration: r => durationMs(r),
+}
+
+function sortRuns(list, { key, dir }) {
+  const val = SORT_VALUE[key] || SORT_VALUE.queued
+  const sign = dir === 'asc' ? 1 : -1
+  return [...list].sort((a, b) => {
+    const x = val(a), y = val(b)
+    if (x == null && y == null) return 0
+    if (x == null) return 1
+    if (y == null) return -1
+    return (x < y ? -1 : x > y ? 1 : 0) * sign
+  })
+}
+
+function SortTh({ col, sort, onSort, children }) {
+  const active = sort.key === col
+  return (
+    <Table.Th
+      onClick={() => onSort(active ? { key: col, dir: sort.dir === 'asc' ? 'desc' : 'asc' } : { key: col, dir: col === 'id' || col === 'pipeline' || col === 'trigger' ? 'asc' : 'desc' })}
+      style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}
+      aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+      {children} <Text span size="xs" c={active ? undefined : 'dimmed'}>{active ? (sort.dir === 'asc' ? '▲' : '▼') : '↕'}</Text>
+    </Table.Th>
+  )
 }
 
 function eventLabel(ev) {
@@ -163,7 +219,7 @@ function RunDrawer({ runId, opened, onClose }) {
           <Timeline active={detail.events.length} bulletSize={12} lineWidth={2} mb="md">
             {detail.events.map(ev => (
               <Timeline.Item key={ev.id} title={eventLabel(ev)}>
-                <Text size="xs" c="dimmed">{new Date(ev.ts).toLocaleTimeString()}</Text>
+                <Text size="xs" c="dimmed">{fmtTime(ev.ts)}</Text>
               </Timeline.Item>
             ))}
           </Timeline>
@@ -230,18 +286,25 @@ export default function App() {
   const [error, setError] = useState('')
   const [selectedRun, setSelectedRun] = useState(null)
   const [filter, setFilter] = useState(null) // "<repo|self>/<pipeline>"
+  const [sort, setSort] = useState({ key: 'queued', dir: 'desc' })
+  const [limit, setLimit] = useState('50')
   const [drawerOpened, { open: openDrawer, close: closeDrawer }] = useDisclosure(false)
 
   const refresh = useCallback(async () => {
     try {
-      const res = await fetch('/api/runs?limit=50')
+      const res = await fetch(`/api/runs?limit=${limit}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       setRuns(await res.json())
       setError('')
     } catch (e) {
       setError(e.message)
     }
-  }, [])
+  }, [limit])
+
+  const shown = useMemo(
+    () => sortRuns((runs || []).filter(r => !filter || `${r.repo || 'self'}/${r.pipeline}` === filter), sort),
+    [runs, filter, sort],
+  )
 
   useEffect(() => {
     refresh()
@@ -287,17 +350,18 @@ export default function App() {
             <Table highlightOnHover>
               <Table.Thead>
                 <Table.Tr>
-                  <Table.Th>Run</Table.Th>
-                  <Table.Th>Pipeline</Table.Th>
-                  <Table.Th>Trigger</Table.Th>
-                  <Table.Th>Status</Table.Th>
-                  <Table.Th>Queued</Table.Th>
-                  <Table.Th>Duration</Table.Th>
+                  <SortTh col="id" sort={sort} onSort={setSort}>Run</SortTh>
+                  <SortTh col="pipeline" sort={sort} onSort={setSort}>Pipeline</SortTh>
+                  <SortTh col="trigger" sort={sort} onSort={setSort}>Trigger</SortTh>
+                  <SortTh col="status" sort={sort} onSort={setSort}>Status</SortTh>
+                  <SortTh col="queued" sort={sort} onSort={setSort}>Queued</SortTh>
+                  <SortTh col="finished" sort={sort} onSort={setSort}>Finished</SortTh>
+                  <SortTh col="duration" sort={sort} onSort={setSort}>Duration</SortTh>
                   <Table.Th>Error</Table.Th>
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
-                {runs.filter(r => !filter || `${r.repo || 'self'}/${r.pipeline}` === filter).map(run => (
+                {shown.map(run => (
                   <Table.Tr key={run.id} onClick={() => openRun(run.id)} style={{ cursor: 'pointer' }}>
                     <Table.Td style={{ fontFamily: 'monospace' }}>{run.id}</Table.Td>
                     <Table.Td>
@@ -319,8 +383,9 @@ export default function App() {
                         {run.status}
                       </Badge>
                     </Table.Td>
-                    <Table.Td>{fmtTime(run.queued_at)}</Table.Td>
-                    <Table.Td>{fmtDuration(run)}</Table.Td>
+                    <Table.Td><TimeCell ts={run.queued_at} /></Table.Td>
+                    <Table.Td><TimeCell ts={run.finished_at} /></Table.Td>
+                    <Table.Td style={{ whiteSpace: 'nowrap' }}>{fmtDuration(run)}</Table.Td>
                     <Table.Td>
                       {run.error ? (
                         <Tooltip label={run.error}><Text size="xs" c="red" truncate maw={220}>{run.error}</Text></Tooltip>
@@ -332,11 +397,19 @@ export default function App() {
             </Table>
           )}
         </Card>
-        <Text size="xs" c="dimmed" mt="sm">
-          {pipelines.length > 0
-            ? `Pipelines: ${pipelines.map(p => p.name).join(', ')}`
-            : 'No pipelines found in .petal/pipelines/'} · auto-refresh 5s
-        </Text>
+        <Group justify="space-between" mt="sm">
+          <Text size="xs" c="dimmed">
+            {runs ? `${shown.length} of ${runs.length} loaded runs` : ''}
+            {filter ? ` · filtered to ${filter}` : ''}
+            {pipelines.length > 0
+              ? ` · self pipelines: ${pipelines.map(p => p.name).join(', ')}`
+              : ''} · auto-refresh 5s · old finished runs are pruned (the newest per pipeline are always kept)
+          </Text>
+          <Group gap={6}>
+            <Text size="xs" c="dimmed">load</Text>
+            <SegmentedControl size="xs" value={limit} onChange={setLimit} data={['50', '200', '500']} />
+          </Group>
+        </Group>
       </AppShell.Main>
 
       <RunDrawer runId={selectedRun} opened={drawerOpened} onClose={closeDrawer} />

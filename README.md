@@ -297,4 +297,5 @@ docs/adr/                     # architecture decision records
 - [x] **Modular + DAG steps** (ADR 0005): `uses:` step library, `needs` DAG with bounded concurrency, step/run timeouts, cancel API
 - [x] **Step graph + step metrics** (ADR 0007): recorded `plan` per run, live DAG view with per-step status in the console, per-pipeline health strip, `petal_steps_total` / `petal_step_duration_seconds`
 - [x] **Run notifications** (ADR 0008): failed runs → ntfy with a console link; `notify_success: [pipeline]` in the config pushes a pipeline's outputs on success (e.g. Tulip's monthly backtest summary)
+- [x] **Retention** (ADR 0009): janitor prunes finished runs older than `-retention` (30d) with their events and logs, keeping the newest `-retention-keep` (20) per pipeline; VACUUM after; `petal_db_*` + `petal_retention_*` metrics. Console: sortable run table, date+time columns, load 50/200/500
 - [ ] petal CLI scaffolding
