@@ -296,4 +296,5 @@ docs/adr/                     # architecture decision records
 - [ ] **D — catalog**: ArgoCD/K8s views, scorecards, notifications
 - [x] **Modular + DAG steps** (ADR 0005): `uses:` step library, `needs` DAG with bounded concurrency, step/run timeouts, cancel API
 - [x] **Step graph + step metrics** (ADR 0007): recorded `plan` per run, live DAG view with per-step status in the console, per-pipeline health strip, `petal_steps_total` / `petal_step_duration_seconds`
+- [x] **Run notifications** (ADR 0008): failed runs → ntfy with a console link; `notify_success: [pipeline]` in the config pushes a pipeline's outputs on success (e.g. Tulip's monthly backtest summary)
 - [ ] petal CLI scaffolding

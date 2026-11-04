@@ -170,3 +170,28 @@ repos:
 		}
 	}
 }
+
+func TestLoadConfigNotifySuccess(t *testing.T) {
+	p := write(t, `
+self:
+  notify_success: [docker-image]
+repos:
+  tulip:
+    url: https://github.com/x/Tulip.git
+    notify_success: [backtest]
+`)
+	c, err := LoadConfig(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !NotifiesSuccess(c.Repos["tulip"].NotifySuccess, "backtest") || NotifiesSuccess(c.Repos["tulip"].NotifySuccess, "other") {
+		t.Errorf("tulip notify_success = %v", c.Repos["tulip"].NotifySuccess)
+	}
+	if !NotifiesSuccess(c.SelfNotifySuccess, "docker-image") {
+		t.Errorf("self notify_success = %v", c.SelfNotifySuccess)
+	}
+	bad := write(t, "repos:\n  x:\n    url: https://github.com/x/y.git\n    notify_success: [\"Bad Name\"]\n")
+	if _, err := LoadConfig(bad); err == nil {
+		t.Error("invalid pipeline name in notify_success must be rejected")
+	}
+}

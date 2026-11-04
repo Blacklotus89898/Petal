@@ -29,6 +29,11 @@ type Pool struct {
 
 	mu      sync.Mutex
 	cancels map[string]context.CancelCauseFunc // running runs, by ID
+
+	// OnFinish, if set, is called after a run's result is recorded (e.g. ntfy
+	// notifications, ADR 0008). It must not block for long and can't change
+	// the run's outcome.
+	OnFinish func(ctx context.Context, run runs.Run, res executor.Result)
 }
 
 // Cancel asks a running run to stop (cause: executor.ErrCancelRequested).
@@ -98,6 +103,9 @@ func (p *Pool) worker(ctx context.Context, id int) {
 			_ = p.store.AppendEvent(ctx, run.ID, "output", string(payload))
 		}
 		p.log.Info("run finished", "run", run.ID, "status", res.Status)
+		if p.OnFinish != nil {
+			p.OnFinish(context.WithoutCancel(ctx), *run, res)
+		}
 	}
 }
 

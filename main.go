@@ -21,6 +21,7 @@ import (
 
 	"github.com/Blacklotus89898/Petal/internal/api"
 	"github.com/Blacklotus89898/Petal/internal/executor"
+	"github.com/Blacklotus89898/Petal/internal/notify"
 	"github.com/Blacklotus89898/Petal/internal/repos"
 	"github.com/Blacklotus89898/Petal/internal/runs"
 	"github.com/Blacklotus89898/Petal/internal/scheduler"
@@ -37,6 +38,9 @@ func main() {
 	execName := flag.String("executor", "stub", "executor: stub or steps")
 	workdir := flag.String("workdir", ".", "source workdir pipelines are loaded from (steps executor)")
 	reposPath := flag.String("repos", "", "config YAML: multi-repo allowlist (ADR 0004) + declared schedules; missing file = self repo only")
+	ntfyURL := flag.String("ntfy-url", "", "ntfy base URL for run notifications (ADR 0008); empty = off")
+	ntfyTopic := flag.String("ntfy-topic", "petal", "ntfy topic for run notifications")
+	publicURL := flag.String("public-url", "", "console URL used in notification links, e.g. https://petal.lab.home")
 	secretsDir := flag.String("secrets", "", "directory of secret files (one per secret; the same path must exist in the dind container) — ADR 0006; empty = no secrets")
 	flag.Parse()
 	if *dataDir == "" {
@@ -86,6 +90,19 @@ func main() {
 	logger.Info("executor selected", "executor", exec.Name())
 
 	pool := scheduler.NewPool(store, exec, *workers, logger)
+	// ADR 0008: failed runs always notify; successful ones only for pipelines
+	// the (git-reviewed) config lists in notify_success.
+	if n := notify.New(*ntfyURL, *ntfyTopic, *publicURL, logger); n != nil {
+		pool.OnFinish = func(ctx context.Context, run runs.Run, res executor.Result) {
+			success := repos.NotifiesSuccess(cfg.SelfNotifySuccess, run.Pipeline)
+			if run.Repo != "" {
+				success = repos.NotifiesSuccess(allow[run.Repo].NotifySuccess, run.Pipeline)
+			}
+			n.RunFinished(ctx, notify.Run{ID: run.ID, Pipeline: run.Pipeline, Repo: run.Repo,
+				Status: res.Status, Error: res.Error, Output: res.Output}, success)
+		}
+		logger.Info("ntfy notifications on", "url", *ntfyURL, "topic", *ntfyTopic)
+	}
 	go pool.Start(ctx)
 	go pool.RunCronLoop(ctx)
 

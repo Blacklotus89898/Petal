@@ -25,6 +25,20 @@ type Repo struct {
 	Secrets     []string `json:"secrets,omitempty"`
 	Docker      bool     `json:"docker,omitempty"`
 	TrustedRefs []string `json:"trusted_refs,omitempty"`
+	// NotifySuccess: pipelines whose successful runs push their outputs to
+	// ntfy (failures always notify). Petal's config, not the pipeline file,
+	// decides — a repo can't make itself chatty.
+	NotifySuccess []string `json:"notify_success,omitempty"`
+}
+
+// NotifiesSuccess reports whether a successful run of pipeline is pushed.
+func NotifiesSuccess(list []string, pipeline string) bool {
+	for _, p := range list {
+		if p == pipeline {
+			return true
+		}
+	}
+	return false
 }
 
 // GrantsAt returns what a run of this repo at ref is granted: everything when
@@ -60,19 +74,23 @@ type Config struct {
 	// Granted to runs of the git-synced self repo (ADR 0006).
 	SelfSecrets []string
 	SelfDocker  bool
+	// Self-repo pipelines whose successful runs notify (see Repo.NotifySuccess).
+	SelfNotifySuccess []string
 }
 
 type fileSpec struct {
 	Self struct {
-		Secrets []string `yaml:"secrets"`
-		Docker  bool     `yaml:"docker"`
+		Secrets       []string `yaml:"secrets"`
+		Docker        bool     `yaml:"docker"`
+		NotifySuccess []string `yaml:"notify_success"`
 	} `yaml:"self"`
 	Repos map[string]struct {
-		URL         string   `yaml:"url"`
-		DefaultRef  string   `yaml:"default_ref"`
-		Secrets     []string `yaml:"secrets"`
-		Docker      bool     `yaml:"docker"`
-		TrustedRefs []string `yaml:"trusted_refs"`
+		URL           string   `yaml:"url"`
+		DefaultRef    string   `yaml:"default_ref"`
+		Secrets       []string `yaml:"secrets"`
+		Docker        bool     `yaml:"docker"`
+		TrustedRefs   []string `yaml:"trusted_refs"`
+		NotifySuccess []string `yaml:"notify_success"`
 	} `yaml:"repos"`
 	Schedules []Schedule `yaml:"schedules"`
 }
@@ -166,7 +184,10 @@ func LoadConfig(path string) (Config, error) {
 		if !privileged && len(r.TrustedRefs) > 0 {
 			return Config{}, fmt.Errorf("%s: repo %q: trusted_refs without secrets or docker", path, alias)
 		}
-		out[alias] = Repo{Alias: alias, URL: r.URL, DefaultRef: ref, Secrets: r.Secrets, Docker: r.Docker, TrustedRefs: trusted}
+		if err := checkSecretNames(r.NotifySuccess); err != nil { // same charset as pipeline names
+			return Config{}, fmt.Errorf("%s: repo %q: notify_success: %w", path, alias, err)
+		}
+		out[alias] = Repo{Alias: alias, URL: r.URL, DefaultRef: ref, Secrets: r.Secrets, Docker: r.Docker, TrustedRefs: trusted, NotifySuccess: r.NotifySuccess}
 	}
 	if err := checkSecretNames(spec.Self.Secrets); err != nil {
 		return Config{}, fmt.Errorf("%s: self: %w", path, err)
@@ -189,7 +210,11 @@ func LoadConfig(path string) (Config, error) {
 		}
 		seen[sch.ID] = true
 	}
-	return Config{Repos: out, Schedules: spec.Schedules, SelfSecrets: spec.Self.Secrets, SelfDocker: spec.Self.Docker}, nil
+	if err := checkSecretNames(spec.Self.NotifySuccess); err != nil {
+		return Config{}, fmt.Errorf("%s: self: notify_success: %w", path, err)
+	}
+	return Config{Repos: out, Schedules: spec.Schedules, SelfSecrets: spec.Self.Secrets, SelfDocker: spec.Self.Docker,
+		SelfNotifySuccess: spec.Self.NotifySuccess}, nil
 }
 
 // List returns the repos sorted by alias (stable API output).
