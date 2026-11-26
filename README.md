@@ -1,5 +1,7 @@
 # Petal 🌸
 
+[![build](https://github.com/Blacklotus89898/Petal/actions/workflows/build-petal.yaml/badge.svg)](https://github.com/Blacklotus89898/Petal/actions/workflows/build-petal.yaml)
+
 Homelab pipeline orchestrator: a control plane for repo-native CI/CD
 pipelines. **Backstage is the portal; Petal is the orchestrator** — Backstage
 triggers Petal runs, Petal executes and remembers them
@@ -299,3 +301,12 @@ docs/adr/                     # architecture decision records
 - [x] **Run notifications** (ADR 0008): failed runs → ntfy with a console link; `notify_success: [pipeline]` in the config pushes a pipeline's outputs on success (e.g. Tulip's monthly backtest summary)
 - [x] **Retention** (ADR 0009): janitor prunes finished runs older than `-retention` (30d) with their events and logs, keeping the newest `-retention-keep` (20) per pipeline; VACUUM after; `petal_db_*` + `petal_retention_*` metrics. Console: sortable run table, date+time columns, load 50/200/500
 - [ ] petal CLI scaffolding
+
+## Docs
+
+- [docs/adr/](docs/adr/README.md) — decision records 0001–0009 (read 0001–0003 before changing the architecture)
+- Deployment: Homelab [`services/petal`](https://github.com/Blacklotus89898/Homelab/tree/main/services/petal)
+
+## Contributing
+
+Read [AGENTS.md](AGENTS.md) first — it is the guide for humans and coding agents alike: commands, layout, the rules that must not break, how to add a feature and how changes ship.
